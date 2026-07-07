@@ -43,15 +43,14 @@ ok(){ echo -e "${C_GRN}[成功]${C_RESET} $*"; }
 pause(){ read -rp "按回车继续..." _; }
 safe_name(){ echo "$1" | sed 's#[/:*?"<>| ]#_#g'; }
 
-timer_base_pm30(){ # 输出“中心时间 -30分钟”的 HH:MM，用于配合 RandomizedDelaySec=1h 实现 ±30分钟
-  local h="$1" m="$2"
-  python3 - "$h" "$m" <<'PYT'
-import sys
-from datetime import datetime, timedelta
-h=int(sys.argv[1]); m=int(sys.argv[2])
-dt=datetime(2000,1,1,h,m)-timedelta(minutes=30)
-print(dt.strftime('%H:%M'))
-PYT
+timer_base_pm30(){ # 输出“中心时间 -30分钟”的 HH:MM，用于配合 RandomizedDelaySec=1h 实现 ±30分钟；纯 bash，无需 python3
+  local h="$1" m="$2" total
+  h=$((10#$h)); m=$((10#$m))
+  total=$((h * 60 + m - 30))
+  while [ "$total" -lt 0 ]; do total=$((total + 1440)); done
+  total=$((total % 1440))
+  printf '%02d:%02d
+' $((total / 60)) $((total % 60))
 }
 timer_random_line(){
   echo "RandomizedDelaySec=1h"
@@ -559,7 +558,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-ipquality.timer
+  if ! systemctl enable --now sshtool-ipquality.timer; then
+    err "定期测 IP 质量开启失败，请运行：systemctl status sshtool-ipquality.timer"
+    return 1
+  fi
   ok "定期测 IP 质量已开启 (每天 ${hour}:${minute} ±30分钟)"
 }
 disable_ipquality_timer(){
@@ -600,7 +602,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-yabs.timer
+  if ! systemctl enable --now sshtool-yabs.timer; then
+    err "定期 YABS 测试开启失败，请运行：systemctl status sshtool-yabs.timer"
+    return 1
+  fi
   ok "定期 YABS 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
 }
 disable_yabs_timer(){
@@ -640,7 +645,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-bench.timer
+  if ! systemctl enable --now sshtool-bench.timer; then
+    err "定期 Bench.sh 测试开启失败，请运行：systemctl status sshtool-bench.timer"
+    return 1
+  fi
   ok "定期 Bench.sh 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
 }
 disable_bench_timer(){
@@ -686,7 +694,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-nodequality.timer
+  if ! systemctl enable --now sshtool-nodequality.timer; then
+    err "定期 NodeQuality 检测开启失败，请运行：systemctl status sshtool-nodequality.timer"
+    return 1
+  fi
   ok "定期 NodeQuality 检测已开启 (从今天开始，每 ${interval} 天：${hour}:${minute} ±30分钟 + 同日 ${ehour}:${eminute} ±30分钟)"
 }
 disable_nq_timer(){
