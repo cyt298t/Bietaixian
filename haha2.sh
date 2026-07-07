@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  综合服务器工具箱 (Debian 12)
-#  模块: 1) 定期 Ping 监控   2) 定期测 IP 质量
+#  模块: 1) 开启引导   2) 定期 Ping 监控   3) 定期测 IP 质量   4) 定期 YABS 测试
 # ============================================================
 set -o pipefail
 
@@ -20,6 +20,18 @@ IPQ_DIR="${TOOL_DIR}/ipquality"
 IPQ_DATA="${IPQ_DIR}/data"
 IPQ_KEEP="${IPQ_DIR}/keep"      # 长期保留目录, 自动清理不删
 IPQ_SETTING="${IPQ_DIR}/settings.conf"
+YABS_DIR="${TOOL_DIR}/yabs"
+YABS_DATA="${YABS_DIR}/data"
+YABS_KEEP="${YABS_DIR}/keep"
+YABS_SETTING="${YABS_DIR}/settings.conf"
+BENCH_DIR="${TOOL_DIR}/bench"
+BENCH_DATA="${BENCH_DIR}/data"
+BENCH_KEEP="${BENCH_DIR}/keep"
+BENCH_SETTING="${BENCH_DIR}/settings.conf"
+NQ_DIR="${TOOL_DIR}/nodequality"
+NQ_DATA="${NQ_DIR}/data"
+NQ_KEEP="${NQ_DIR}/keep"
+NQ_SETTING="${NQ_DIR}/settings.conf"
 
 # ---------- 颜色 ----------
 C_RESET="\033[0m"; C_RED="\033[31m"; C_GRN="\033[32m"; C_YEL="\033[33m"
@@ -31,34 +43,127 @@ ok(){ echo -e "${C_GRN}[成功]${C_RESET} $*"; }
 pause(){ read -rp "按回车继续..." _; }
 safe_name(){ echo "$1" | sed 's#[/:*?"<>| ]#_#g'; }
 
+timer_base_pm30(){ # 输出“中心时间 -30分钟”的 HH:MM，用于配合 RandomizedDelaySec=1h 实现 ±30分钟
+  local h="$1" m="$2"
+  python3 - "$h" "$m" <<'PYT'
+import sys
+from datetime import datetime, timedelta
+h=int(sys.argv[1]); m=int(sys.argv[2])
+dt=datetime(2000,1,1,h,m)-timedelta(minutes=30)
+print(dt.strftime('%H:%M'))
+PYT
+}
+timer_random_line(){
+  echo "RandomizedDelaySec=1h"
+}
+
+read_int_range(){
+  # 用法: read_int_range "提示" "当前值" 最小 最大
+  # 只接受数字；空回车保留当前值。
+  local prompt="$1" current="$2" min="$3" max="$4" v
+  while true; do
+    read -rp "${prompt} [当前 ${current}，直接回车保留]: " v
+    v="${v:-$current}"
+    if [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -ge "$min" ] && [ "$v" -le "$max" ]; then
+      printf '%02d\n' "$v"
+      return 0
+    fi
+    err "只能输入 ${min}-${max} 之间的数字，不要输入英文、冒号或其它符号。"
+  done
+}
+
+read_positive_int(){
+  # 用法: read_positive_int "提示" "当前值"
+  # 只接受正整数；空回车保留当前值。
+  local prompt="$1" current="$2" v
+  while true; do
+    read -rp "${prompt} [当前 ${current}，直接回车保留]: " v
+    v="${v:-$current}"
+    if [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -gt 0 ]; then
+      printf '%s\n' "$v"
+      return 0
+    fi
+    err "只能输入大于 0 的数字，不要输入英文或其它符号。"
+  done
+}
+
 init_dirs(){
-  mkdir -p "$PING_DATA" "$IPQ_DATA" "$IPQ_KEEP"
+  mkdir -p "$PING_DATA" "$IPQ_DATA" "$IPQ_KEEP" "$YABS_DATA" "$YABS_KEEP" "$BENCH_DATA" "$BENCH_KEEP" "$NQ_DATA" "$NQ_KEEP"
   [ -f "$PING_SETTING" ] || printf 'INTERVAL=60\nRETAIN_DAYS=7\n' > "$PING_SETTING"
-  [ -f "$IPQ_SETTING" ]  || printf 'RETAIN_DAYS=30\n' > "$IPQ_SETTING"
+  [ -f "$IPQ_SETTING" ]  || printf 'HOUR=03\nMINUTE=00\nRETAIN_DAYS=30\n' > "$IPQ_SETTING"
+  [ -f "$YABS_SETTING" ] || printf 'HOUR=04\nMINUTE=00\nRETAIN_DAYS=30\n' > "$YABS_SETTING"
+  [ -f "$BENCH_SETTING" ] || printf 'HOUR=05\nMINUTE=00\nRETAIN_DAYS=30\n' > "$BENCH_SETTING"
+  [ -f "$NQ_SETTING" ] || printf 'INTERVAL_DAYS=7\nHOUR=06\nMINUTE=00\nEVENING_HOUR=22\nEVENING_MINUTE=00\nSTART_DATE=%s\nRETAIN_DAYS=30\n' "$(date '+%Y-%m-%d')" > "$NQ_SETTING"
   touch "$PING_CONF"
 }
 
-# ---------- 日志清洗: 只保留最后一次整屏清屏后的最终报告 ----------
-# 去 spinner 动画(按 \r 取最后一帧) + 删光标定位/擦除码, 保留颜色(SGR)
+# ---------- 日志清洗: 查看 IP 质量报告时裁掉报告正文前的杂质 ----------
+# v2: 不再只依赖 clear 的 ESC[2J/ESC[3J；优先用“IP质量体检报告”作为正文锚点。
+# 这样单独查看和全部查看都会自动跳过依赖安装输出、apt 报错、TERM 报错、赞助商块等前置垃圾。
 strip_clear(){
   local f="$1"
-  awk 'BEGIN{ esc=sprintf("%c",27); RS="^$"; }
-       { buf=$0;
-         # 找最后一次整屏清屏 ESC[2J 或 ESC[3J 的位置
-         pat=esc "[2J"; pat3=esc "[3J";
-         p=0; i=1;
-         while(1){ a=index(substr(buf,i),pat); b=index(substr(buf,i),pat3);
-                   pos=0; ln=0;
-                   if(a>0 && (b==0 || a<b)){ pos=i+a-1; ln=length(pat); }
-                   else if(b>0){ pos=i+b-1; ln=length(pat3); }
-                   else break;
-                   p=pos+ln; i=p; }
-         if(p>0) buf=substr(buf,p);
-         printf "%s", buf;
-       }' "$f" \
-  | awk 'BEGIN{ FS="\r" }
-         { n=split($0,a,"\r"); print a[n] }' \
-  | sed -E "s/\x1b\[[0-9;]*[HJKfABCDsu]//g; s/\x1b[()][AB0]//g; s/\x1b\[[0-9]*[GdX]//g"
+  perl -0777 - "$f" <<'PL'
+use strict;
+use warnings;
+
+my $file = $ARGV[0];
+open my $fh, '<', $file or die "无法读取 $file: $!\n";
+local $/;
+my $text = <$fh>;
+close $fh;
+$text = '' unless defined $text;
+
+# 兼容旧逻辑：如果日志里确实存在整屏清屏，先取最后一次清屏后的内容。
+my $last_clear = -1;
+while ($text =~ /\e\[(?:2|3)J/g) {
+  $last_clear = pos($text);
+}
+$text = substr($text, $last_clear) if $last_clear >= 0;
+
+# spinner/进度动画常用 \r 原地刷新；按行保留最后一帧。
+my @lines;
+for my $line (split /\n/, $text, -1) {
+  my @parts = split /\r/, $line, -1;
+  push @lines, (@parts ? $parts[-1] : '');
+}
+$text = join "\n", @lines;
+
+# 去掉会影响查看的终端控制码，但保留 SGR 颜色码（ESC[...m）。
+# 这样仍然能裁掉清屏/光标移动/OSC 标题等垃圾控制符，同时保留 IPQuality 报告原本的彩色输出。
+$text =~ s/\e\][^\a]*(?:\a|\e\\)//g;       # OSC/title
+$text =~ s/\e\[([0-?]*[ -\/]*)([@-~])/$2 eq 'm' ? "\e[$1$2" : ''/ge;  # keep SGR colors only
+$text =~ s/\e[()][AB0]//g;                  # charset selection
+$text =~ s/\e[@-Z\\-_]//g;                  # other one-char ESC sequences
+
+# 关键优化：定位真正报告正文。
+my $anchor = index($text, 'IP质量体检报告');
+if ($anchor >= 0) {
+  # 尽量从报告标题上方那行 ####### 分隔线开始，而不是从标题字样中间开始。
+  my $prefix = substr($text, 0, $anchor);
+  my $hash_pos = rindex($prefix, '########################################################################');
+  if ($hash_pos >= 0) {
+    $text = substr($text, $hash_pos);
+  } else {
+    my $line_start = rindex($prefix, "\n");
+    $text = substr($text, $line_start >= 0 ? $line_start + 1 : $anchor);
+  }
+} elsif ($text =~ /(?m)^#{20,}\s*$/) {
+  # 兜底：如果报告格式以后改了，尽量裁掉常见前置垃圾，从第一个“大段分隔线”开始。
+  $text = substr($text, $-[0]);
+}
+
+# 去掉常见孤立噪声行，避免锚点未命中时仍然很脏。
+my @out;
+for my $line (split /\n/, $text) {
+  $line =~ s/[ \t]+$//;
+  next if $line =~ /^\s*TERM environment variable not set\.\s*$/;
+  push @out, $line;
+}
+$text = join "\n", @out;
+$text =~ s/^\n+//;
+$text =~ s/\n+$//;
+print $text, "\n" if length $text;
+PL
 }
 
 # ============================================================
@@ -75,6 +180,220 @@ ipquality_enabled(){ systemctl is-enabled --quiet sshtool-ipquality.timer 2>/dev
 ipq_status_text(){
   if ipquality_enabled; then echo -e "${C_GRN}运行中${C_RESET}"
   else echo -e "${C_GRY}未运行${C_RESET}"; fi
+}
+ipq_hour(){
+  local h
+  h=$(grep -E '^HOUR=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2)
+  h=${h:-03}
+  if [[ "$h" =~ ^[0-9]{1,2}$ ]] && [ "$h" -ge 0 ] && [ "$h" -le 23 ]; then
+    printf '%02d' "$h"
+  else
+    printf '03'
+  fi
+}
+ipq_minute(){
+  local m
+  m=$(grep -E '^MINUTE=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2)
+  m=${m:-00}
+  if [[ "$m" =~ ^[0-9]{1,2}$ ]] && [ "$m" -ge 0 ] && [ "$m" -le 59 ]; then
+    printf '%02d' "$m"
+  else
+    printf '00'
+  fi
+}
+yabs_enabled(){ systemctl is-enabled --quiet sshtool-yabs.timer 2>/dev/null; }
+yabs_status_text(){
+  if yabs_enabled; then echo -e "${C_GRN}运行中${C_RESET}"
+  else echo -e "${C_GRY}未运行${C_RESET}"; fi
+}
+bench_enabled(){ systemctl is-enabled --quiet sshtool-bench.timer 2>/dev/null; }
+bench_status_text(){
+  if bench_enabled; then echo -e "${C_GRN}运行中${C_RESET}"
+  else echo -e "${C_GRY}未运行${C_RESET}"; fi
+}
+nq_enabled(){ systemctl is-enabled --quiet sshtool-nodequality.timer 2>/dev/null; }
+nq_status_text(){
+  if nq_enabled; then echo -e "${C_GRN}运行中${C_RESET}"
+  else echo -e "${C_GRY}未运行${C_RESET}"; fi
+}
+yabs_hour(){
+  local h
+  h=$(grep -E '^HOUR=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2)
+  h=${h:-04}
+  if [[ "$h" =~ ^[0-9]{1,2}$ ]] && [ "$h" -ge 0 ] && [ "$h" -le 23 ]; then
+    printf '%02d' "$h"
+  else
+    printf '04'
+  fi
+}
+yabs_minute(){
+  local m
+  m=$(grep -E '^MINUTE=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2)
+  m=${m:-00}
+  if [[ "$m" =~ ^[0-9]{1,2}$ ]] && [ "$m" -ge 0 ] && [ "$m" -le 59 ]; then
+    printf '%02d' "$m"
+  else
+    printf '00'
+  fi
+}
+
+
+yabs_prepare_swap_if_needed(){
+  # YABS 在小内存机器上容易因为内存不足中断；开启定时/执行前自动补足 swap。
+  # 规则：物理内存不足 1024MB 时，按差额创建/调整专用 swap 文件。
+  # 例如 MemTotal≈500MB，则创建约 524MB 的 /swapfile.sshtool-yabs。
+  local target_mb=1024
+  local mem_mb deficit_mb swapfile cur_mb avail_mb
+  swapfile="/swapfile.sshtool-yabs"
+
+  mem_mb=$(awk '/MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)
+  if ! [[ "${mem_mb:-}" =~ ^[0-9]+$ ]]; then
+    err "无法读取当前内存大小，跳过自动 swap 检查"
+    return 0
+  fi
+
+  if [ "$mem_mb" -ge "$target_mb" ]; then
+    echo "内存 ${mem_mb}MB 已达到 ${target_mb}MB，无需为 YABS 额外添加 swap。"
+    return 0
+  fi
+
+  deficit_mb=$((target_mb - mem_mb))
+  [ "$deficit_mb" -lt 1 ] && deficit_mb=1
+
+  cur_mb=0
+  if [ -f "$swapfile" ]; then
+    cur_mb=$(du -m "$swapfile" 2>/dev/null | awk '{print $1}')
+    cur_mb=${cur_mb:-0}
+  fi
+
+  if [ "$cur_mb" -ge "$deficit_mb" ] && swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$swapfile"; then
+    echo "内存 ${mem_mb}MB 未达到 ${target_mb}MB；专用 swap 已存在并启用：${swapfile} (${cur_mb}MB)。"
+    return 0
+  fi
+
+  avail_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+  avail_mb=${avail_mb:-0}
+  if [ "$avail_mb" -le $((deficit_mb + 64)) ]; then
+    err "磁盘剩余空间不足，无法创建 ${deficit_mb}MB swap 文件（当前可用约 ${avail_mb}MB）"
+    return 1
+  fi
+
+  echo "内存 ${mem_mb}MB 未达到 ${target_mb}MB，自动为 YABS 添加 ${deficit_mb}MB swap：${swapfile}"
+
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$swapfile"; then
+    swapoff "$swapfile" || return 1
+  fi
+  rm -f "$swapfile"
+
+  if command -v fallocate >/dev/null 2>&1; then
+    fallocate -l "${deficit_mb}M" "$swapfile" 2>/dev/null || dd if=/dev/zero of="$swapfile" bs=1M count="$deficit_mb" status=none
+  else
+    dd if=/dev/zero of="$swapfile" bs=1M count="$deficit_mb" status=none
+  fi
+  chmod 600 "$swapfile"
+  mkswap "$swapfile" >/dev/null
+  swapon "$swapfile"
+
+  # 持久化，避免重启后丢失；先清掉旧的同路径记录，再追加。
+  if [ -f /etc/fstab ]; then
+    awk -v sf="$swapfile" '$1 != sf {print}' /etc/fstab > /etc/fstab.sshtool.tmp && mv /etc/fstab.sshtool.tmp /etc/fstab
+  fi
+  echo "$swapfile none swap sw 0 0" >> /etc/fstab
+
+  ok "YABS 专用 swap 已启用：${deficit_mb}MB"
+}
+bench_hour(){
+  local h
+  h=$(grep -E '^HOUR=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2)
+  h=${h:-05}
+  if [[ "$h" =~ ^[0-9]{1,2}$ ]] && [ "$h" -ge 0 ] && [ "$h" -le 23 ]; then
+    printf '%02d' "$h"
+  else
+    printf '05'
+  fi
+}
+bench_minute(){
+  local m
+  m=$(grep -E '^MINUTE=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2)
+  m=${m:-00}
+  if [[ "$m" =~ ^[0-9]{1,2}$ ]] && [ "$m" -ge 0 ] && [ "$m" -le 59 ]; then
+    printf '%02d' "$m"
+  else
+    printf '00'
+  fi
+}
+
+nq_interval_days(){
+  local n
+  n=$(grep -E '^INTERVAL_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  n=${n:-7}
+  if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt 0 ]; then echo "$n"; else echo 7; fi
+}
+nq_start_date(){
+  local d
+  d=$(grep -E '^START_DATE=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  if date -d "$d" '+%Y-%m-%d' >/dev/null 2>&1; then date -d "$d" '+%Y-%m-%d'; else date '+%Y-%m-%d'; fi
+}
+nq_hour(){
+  local h
+  h=$(grep -E '^HOUR=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  h=${h:-06}
+  if [[ "$h" =~ ^[0-9]{1,2}$ ]] && [ "$h" -ge 0 ] && [ "$h" -le 23 ]; then
+    printf '%02d' "$h"
+  else
+    printf '06'
+  fi
+}
+nq_minute(){
+  local m
+  m=$(grep -E '^MINUTE=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  m=${m:-00}
+  if [[ "$m" =~ ^[0-9]{1,2}$ ]] && [ "$m" -ge 0 ] && [ "$m" -le 59 ]; then
+    printf '%02d' "$m"
+  else
+    printf '00'
+  fi
+}
+nq_evening_hour(){
+  local h
+  h=$(grep -E '^EVENING_HOUR=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  h=${h:-22}
+  if [[ "$h" =~ ^[0-9]{1,2}$ ]] && [ "$h" -ge 0 ] && [ "$h" -le 23 ]; then
+    printf '%02d' "$h"
+  else
+    printf '22'
+  fi
+}
+nq_evening_minute(){
+  local m
+  m=$(grep -E '^EVENING_MINUTE=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2)
+  m=${m:-00}
+  if [[ "$m" =~ ^[0-9]{1,2}$ ]] && [ "$m" -ge 0 ] && [ "$m" -le 59 ]; then
+    printf '%02d' "$m"
+  else
+    printf '00'
+  fi
+}
+nq_due_today(){
+  local start interval today_s start_s days
+  start="$(nq_start_date)"; interval="$(nq_interval_days)"
+  today_s=$(date -d "$(date '+%Y-%m-%d')" '+%s') || return 1
+  start_s=$(date -d "$start" '+%s') || return 1
+  days=$(( (today_s - start_s) / 86400 ))
+  [ "$days" -ge 0 ] && [ $((days % interval)) -eq 0 ]
+}
+run_nq_scheduled(){
+  init_dirs
+  if nq_due_today; then
+    run_nq_once
+  else
+    echo "今天不是 NodeQuality 循环检测日（起点: $(nq_start_date)，间隔: $(nq_interval_days) 天），跳过。"
+  fi
+}
+nq_write_settings(){
+  local interval="$1" hour="$2" minute="$3" ehour="$4" eminute="$5" start_date="$6" retain="$7"
+  printf 'INTERVAL_DAYS=%s\nHOUR=%s\nMINUTE=%s\nEVENING_HOUR=%s\nEVENING_MINUTE=%s\nSTART_DATE=%s\nRETAIN_DAYS=%s\n' \
+    "$interval" "$hour" "$minute" "$ehour" "$eminute" "$start_date" "$retain" > "$NQ_SETTING"
 }
 
 # ============================================================
@@ -112,13 +431,72 @@ run_ping_daemon(){
   done
 }
 
+
 run_ipquality_once(){
   init_dirs
-  local fpath="${IPQ_DATA}/$(date '+%Y-%m-%d_%H时').log"
+  local fpath="${IPQ_DATA}/$(date '+%Y-%m-%d_%H时%M分%S秒').log"
   { echo "===== IP质量检测 $(date '+%Y-%m-%d %H:%M:%S') ====="
     bash <(curl -sL IP.Check.Place) -y 2>&1; } > "$fpath"
   local retain; retain=$(grep -E '^RETAIN_DAYS=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
   find "$IPQ_DATA" -type f -name '*.log' -mtime +"$retain" -delete 2>/dev/null
+  echo "已保存: $fpath"
+}
+
+run_yabs_once(){
+  init_dirs
+  local fpath="${YABS_DATA}/$(date '+%Y-%m-%d_%H时%M分%S秒').log"
+  { echo "===== YABS 测试 $(date '+%Y-%m-%d %H:%M:%S') ====="
+    echo "命令: curl -sL yabs.sh | bash -s -- -i -5"
+    echo
+    yabs_prepare_swap_if_needed || { echo "Swap 准备失败，取消 YABS 测试。"; return 1; }
+    echo
+    curl -sL yabs.sh | bash -s -- -i -5 2>&1
+    echo
+    echo "===== YABS 测试结束 $(date '+%Y-%m-%d %H:%M:%S') ====="
+  } > "$fpath"
+  local retain; retain=$(grep -E '^RETAIN_DAYS=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+  find "$YABS_DATA" -type f -name '*.log' -mtime +"$retain" -delete 2>/dev/null
+  echo "已保存: $fpath"
+}
+
+run_bench_once(){
+  init_dirs
+  local fpath="${BENCH_DATA}/$(date '+%Y-%m-%d_%H时%M分%S秒').log"
+  { echo "===== Bench.sh 测试 $(date '+%Y-%m-%d %H:%M:%S') ====="
+    echo "命令: wget -qO- bench.sh | bash"
+    echo
+    wget -qO- bench.sh | bash 2>&1
+    echo
+    echo "===== Bench.sh 测试结束 $(date '+%Y-%m-%d %H:%M:%S') ====="
+  } > "$fpath"
+  local retain; retain=$(grep -E '^RETAIN_DAYS=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+  find "$BENCH_DATA" -type f -name '*.log' -mtime +"$retain" -delete 2>/dev/null
+  echo "已保存: $fpath"
+}
+
+run_nq_once(){
+  init_dirs
+  local fpath raw links retain
+  fpath="${NQ_DATA}/$(date '+%Y-%m-%d_%H时%M分%S秒').log"
+  raw=$(mktemp)
+  printf 'v\ny\ny\ny\n' | bash <(curl -sL https://run.NodeQuality.com) > "$raw" 2>&1
+  links=$(grep -aoE 'https://nodequality\.com/r/[A-Za-z0-9]+' "$raw" | awk '!seen[$0]++')
+  {
+    echo "===== NodeQuality 检测链接 $(date '+%Y-%m-%d %H:%M:%S') ====="
+    echo "命令: printf 'v\\ny\\ny\\ny\\n' | bash <(curl -sL https://run.NodeQuality.com)"
+    echo
+    if [ -n "$links" ]; then
+      echo "$links"
+    else
+      echo "未提取到 nodequality.com 结果链接。"
+    fi
+    echo
+    echo "===== NodeQuality 检测结束 $(date '+%Y-%m-%d %H:%M:%S') ====="
+  } > "$fpath"
+  rm -f "$raw"
+  retain=$(grep -E '^RETAIN_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+  find "$NQ_DATA" -type f -name '*.log' -mtime +"$retain" -delete 2>/dev/null
+  echo "已保存: $fpath"
 }
 
 # ============================================================
@@ -154,7 +532,11 @@ disable_ping_service(){
 
 install_ipquality_timer(){
   init_dirs
-  local sp; sp="$(self_path)"
+  local sp hour minute base base_h base_m
+  sp="$(self_path)"
+  hour="$(ipq_hour)"
+  minute="$(ipq_minute)"
+  base="$(timer_base_pm30 "$hour" "$minute")"; base_h="${base%:*}"; base_m="${base#*:}"
   cat > /etc/systemd/system/sshtool-ipquality.service <<EOF
 [Unit]
 Description=sshtool IP quality check (oneshot)
@@ -169,7 +551,8 @@ EOF
 Description=sshtool IP quality daily timer
 
 [Timer]
-OnCalendar=*-*-* 05:00:00
+OnCalendar=*-*-* ${base_h}:${base_m}:00
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]
@@ -177,13 +560,140 @@ WantedBy=timers.target
 EOF
   systemctl daemon-reload
   systemctl enable --now sshtool-ipquality.timer
-  ok "定期测 IP 质量已开启 (每天 05:00)"
+  ok "定期测 IP 质量已开启 (每天 ${hour}:${minute} ±30分钟)"
 }
 disable_ipquality_timer(){
   systemctl disable --now sshtool-ipquality.timer 2>/dev/null
   rm -f /etc/systemd/system/sshtool-ipquality.timer /etc/systemd/system/sshtool-ipquality.service
   systemctl daemon-reload
   ok "定期测 IP 质量已关闭"
+}
+
+install_yabs_timer(){
+  init_dirs
+  local sp hour minute base base_h base_m
+  sp="$(self_path)"
+  hour="$(yabs_hour)"
+  minute="$(yabs_minute)"
+  base="$(timer_base_pm30 "$hour" "$minute")"; base_h="${base%:*}"; base_m="${base#*:}"
+  yabs_prepare_swap_if_needed || return 1
+  cat > /etc/systemd/system/sshtool-yabs.service <<EOF
+[Unit]
+Description=sshtool YABS benchmark (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash ${sp} __yabs_once
+EOF
+  cat > /etc/systemd/system/sshtool-yabs.timer <<EOF
+[Unit]
+Description=sshtool YABS daily timer
+
+[Timer]
+OnCalendar=*-*-* ${base_h}:${base_m}:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now sshtool-yabs.timer
+  ok "定期 YABS 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
+}
+disable_yabs_timer(){
+  systemctl disable --now sshtool-yabs.timer 2>/dev/null
+  rm -f /etc/systemd/system/sshtool-yabs.timer /etc/systemd/system/sshtool-yabs.service
+  systemctl daemon-reload
+  ok "定期 YABS 测试已关闭"
+}
+
+install_bench_timer(){
+  init_dirs
+  local sp hour minute base base_h base_m
+  sp="$(self_path)"
+  hour="$(bench_hour)"
+  minute="$(bench_minute)"
+  base="$(timer_base_pm30 "$hour" "$minute")"; base_h="${base%:*}"; base_m="${base#*:}"
+  cat > /etc/systemd/system/sshtool-bench.service <<EOF
+[Unit]
+Description=sshtool Bench.sh benchmark (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash ${sp} __bench_once
+EOF
+  cat > /etc/systemd/system/sshtool-bench.timer <<EOF
+[Unit]
+Description=sshtool Bench.sh daily timer
+
+[Timer]
+OnCalendar=*-*-* ${base_h}:${base_m}:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now sshtool-bench.timer
+  ok "定期 Bench.sh 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
+}
+disable_bench_timer(){
+  systemctl disable --now sshtool-bench.timer 2>/dev/null
+  rm -f /etc/systemd/system/sshtool-bench.timer /etc/systemd/system/sshtool-bench.service
+  systemctl daemon-reload
+  ok "定期 Bench.sh 测试已关闭"
+}
+
+install_nq_timer(){
+  init_dirs
+  local sp interval hour minute ehour eminute retain start_date base1 base2 b1h b1m b2h b2m
+  sp="$(self_path)"
+  interval="$(nq_interval_days)"
+  hour="$(nq_hour)"; minute="$(nq_minute)"
+  ehour="$(nq_evening_hour)"; eminute="$(nq_evening_minute)"
+  retain=$(grep -E '^RETAIN_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+  start_date="$(date '+%Y-%m-%d')"
+  nq_write_settings "$interval" "$hour" "$minute" "$ehour" "$eminute" "$start_date" "$retain"
+  base1="$(timer_base_pm30 "$hour" "$minute")"; b1h="${base1%:*}"; b1m="${base1#*:}"
+  base2="$(timer_base_pm30 "$ehour" "$eminute")"; b2h="${base2%:*}"; b2m="${base2#*:}"
+  cat > /etc/systemd/system/sshtool-nodequality.service <<EOF
+[Unit]
+Description=sshtool NodeQuality scheduled check (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash ${sp} __nq_scheduled
+EOF
+  cat > /etc/systemd/system/sshtool-nodequality.timer <<EOF
+[Unit]
+Description=sshtool NodeQuality interval timer
+
+[Timer]
+OnCalendar=*-*-* ${b1h}:${b1m}:00
+OnCalendar=*-*-* ${b2h}:${b2m}:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now sshtool-nodequality.timer
+  ok "定期 NodeQuality 检测已开启 (从今天开始，每 ${interval} 天：${hour}:${minute} ±30分钟 + 同日 ${ehour}:${eminute} ±30分钟)"
+}
+disable_nq_timer(){
+  systemctl disable --now sshtool-nodequality.timer 2>/dev/null
+  rm -f /etc/systemd/system/sshtool-nodequality.timer /etc/systemd/system/sshtool-nodequality.service
+  systemctl daemon-reload
+  ok "定期 NodeQuality 检测已关闭"
 }
 
 # ============================================================
@@ -529,6 +1039,8 @@ menu_ipq_view(){
       1)
         clear
         local j t2
+        # 全部查看：最新的显示在最上面，最早的显示在最底下。
+        # files[] 在生成时已经按 mtime 倒序排列，这里保持 0 -> idx-1 顺序输出。
         for j in $(seq 0 $((idx-1))); do
           if [ "${iskeep[$j]}" = "1" ]; then t2=" [永久]"; else t2=""; fi
           echo -e "\n========== $(basename "${files[$j]}" .log)${t2} ==========\n"
@@ -543,25 +1055,695 @@ menu_ipq_view(){
   done
 }
 
+menu_ipq_settings(){
+  init_dirs
+  while true; do
+    clear
+    local hour minute retain
+    hour="$(ipq_hour)"
+    minute="$(ipq_minute)"
+    retain=$(grep -E '^RETAIN_DAYS=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+    echo -e "${C_BOLD}== IP 质量设置 ==${C_RESET}"
+    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  结果保留: ${retain} 天"
+    echo
+    echo "  设置说明：这里只需要输入数字。"
+    echo "  示例：想设置为凌晨 3 点整，就选 1 后：小时输入 3，分钟输入 0。"
+    echo "        因为带 ±30分钟，实际会在 02:30-03:30 之间随机执行。"
+    echo
+    echo "  1) 修改定时时间（默认 03:00 ±30分钟）"
+    echo "  2) 修改保留天数"
+    echo "  0) 返回"
+    read -rp "选择: " s
+    case "$s" in
+      1)
+        echo
+        echo "请输入中心时间，只填数字，不要输入冒号。"
+        echo "例：03:00 -> 小时填 3，分钟填 0"
+        local nh nm
+        nh=$(read_int_range "小时 0-23" "$hour" 0 23) || { sleep 1; continue; }
+        nm=$(read_int_range "分钟 0-59" "$minute" 0 59) || { sleep 1; continue; }
+        printf 'HOUR=%02d
+MINUTE=%02d
+RETAIN_DAYS=%s
+' "$nh" "$nm" "$retain" > "$IPQ_SETTING"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        if ipquality_enabled; then install_ipquality_timer >/dev/null; ok "已同步更新 systemd timer"; fi
+        sleep 1;;
+      2)
+        echo
+        echo "请输入结果保留天数，只填数字。"
+        echo "例：保留 30 天就输入 30；保留 90 天就输入 90。"
+        local nr
+        nr=$(read_positive_int "保留天数" "$retain") || { sleep 1; continue; }
+        printf 'HOUR=%s
+MINUTE=%s
+RETAIN_DAYS=%s
+' "$hour" "$minute" "$nr" > "$IPQ_SETTING"
+        ok "已设置保留 ${nr} 天"
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
 menu_ipq(){
   while true; do
     clear
     echo -e "${C_BOLD}===== 定期测 IP 质量 =====${C_RESET}  状态: $(ipq_status_text)"
     echo "  1) 查看结果"
-    echo "  2) 立即检测一次"
-    echo "  3) 开启 (每天 05:00)"
-    echo "  4) 关闭"
+    echo "  2) 开启定时（默认每天 $(ipq_hour):$(ipq_minute) ±30分钟）"
+    echo "  3) 立即测试一次"
+    echo "  4) 设置"
+    echo "  5) 关闭定时"
     echo "  0) 返回主菜单"
     read -rp "选择: " s
     case "$s" in
       1) menu_ipq_view;;
-      2) echo "检测中, 请稍候..."; run_ipquality_once; ok "完成"; pause;;
-      3) install_ipquality_timer; pause;;
-      4) disable_ipquality_timer; pause;;
+      2) install_ipquality_timer; pause;;
+      3) echo "检测中, 请稍候..."; run_ipquality_once; ok "完成"; pause;;
+      4) menu_ipq_settings;;
+      5) disable_ipquality_timer; pause;;
       0|"") return;;
       *) return;;
     esac
   done
+}
+
+# ============================================================
+#  YABS 菜单
+# ============================================================
+yabs_view_one(){
+  local fpath="$1"
+  while true; do
+    clear
+    cat "$fpath"
+    echo
+    echo "  ----------------------------------------------"
+    if [ "$(dirname "$fpath")" = "$YABS_KEEP" ]; then
+      echo -e "  当前状态: ${C_YEL}[永久保留]${C_RESET}"
+      echo "  1) 取消长期保留 (移回普通, 受保留天数管理)"
+    else
+      echo -e "  当前状态: ${C_GRY}普通 (到期自动清理)${C_RESET}"
+      echo "  1) 设为长期保留 (永不自动删除)"
+    fi
+    echo "  0) 返回"
+    read -rp "选择: " act
+    case "$act" in
+      1)
+        local base; base="$(basename "$fpath")"
+        if [ "$(dirname "$fpath")" = "$YABS_KEEP" ]; then
+          mv -f "$fpath" "${YABS_DATA}/${base}" && { ok "已取消长期保留"; fpath="${YABS_DATA}/${base}"; }
+        else
+          mv -f "$fpath" "${YABS_KEEP}/${base}" && { ok "已设为长期保留"; fpath="${YABS_KEEP}/${base}"; }
+        fi
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_yabs_view(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}== YABS 测试结果 ==${C_RESET}"
+    local -a files=() iskeep=()
+    local idx=0 p
+    while IFS=$'	' read -r _ p; do
+      [ -z "$p" ] && continue
+      idx=$((idx+1)); files+=("$p")
+      if [ "$(dirname "$p")" = "$YABS_KEEP" ]; then iskeep+=("1"); else iskeep+=("0"); fi
+    done < <( { ls -1t "${YABS_DATA}"/*.log "${YABS_KEEP}"/*.log 2>/dev/null | while IFS= read -r p; do
+                 [ -e "$p" ] && printf '%s	%s
+' "$(stat -c %Y "$p")" "$p"
+               done; } | sort -t$'	' -k1,1nr )
+    if [ "$idx" -eq 0 ]; then echo "暂无 YABS 测试结果。"; pause; return; fi
+    echo -e "  ${C_CYN}1) 全部记录·按顺序展示${C_RESET}"
+    local k tag
+    for k in $(seq 0 $((idx-1))); do
+      if [ "${iskeep[$k]}" = "1" ]; then tag=" ${C_YEL}[永久]${C_RESET}"; else tag=""; fi
+      printf "  %d) %s%b
+" "$((k+2))" "$(basename "${files[$k]}" .log)" "$tag"
+    done
+    echo "  0) 返回"
+    read -rp "选择编号: " sel
+    case "$sel" in
+      0|"") return;;
+      1)
+        clear
+        local j t2
+        # 全部查看：最新的显示在最上面，最早的显示在最底下。
+        # files[] 在生成时已经按 mtime 倒序排列，这里保持 0 -> idx-1 顺序输出。
+        for j in $(seq 0 $((idx-1))); do
+          if [ "${iskeep[$j]}" = "1" ]; then t2=" [永久]"; else t2=""; fi
+          echo -e "
+========== $(basename "${files[$j]}" .log)${t2} ==========
+"
+          cat "${files[$j]}"
+        done
+        pause;;
+      *)
+        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 2 ] && [ "$sel" -le "$((idx+1))" ]; then
+          yabs_view_one "${files[$((sel-2))]}"
+        else return; fi;;
+    esac
+  done
+}
+
+menu_yabs_settings(){
+  init_dirs
+  while true; do
+    clear
+    local hour minute retain
+    hour="$(yabs_hour)"
+    minute="$(yabs_minute)"
+    retain=$(grep -E '^RETAIN_DAYS=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+    echo -e "${C_BOLD}== YABS 设置 ==${C_RESET}"
+    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  结果保留: ${retain} 天"
+    echo
+    echo "  设置说明：这里只需要输入数字。"
+    echo "  示例：想设置为凌晨 4 点整，就选 1 后：小时输入 4，分钟输入 0。"
+    echo "        因为带 ±30分钟，实际会在 03:30-04:30 之间随机执行。"
+    echo
+    echo "  1) 修改定时时间（默认 04:00 ±30分钟）"
+    echo "  2) 修改保留天数"
+    echo "  0) 返回"
+    read -rp "选择: " s
+    case "$s" in
+      1)
+        echo
+        echo "请输入中心时间，只填数字，不要输入冒号。"
+        echo "例：04:00 -> 小时填 4，分钟填 0"
+        local nh nm
+        nh=$(read_int_range "小时 0-23" "$hour" 0 23) || { sleep 1; continue; }
+        nm=$(read_int_range "分钟 0-59" "$minute" 0 59) || { sleep 1; continue; }
+        printf 'HOUR=%02d
+MINUTE=%02d
+RETAIN_DAYS=%s
+' "$nh" "$nm" "$retain" > "$YABS_SETTING"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        if yabs_enabled; then install_yabs_timer >/dev/null; ok "已同步更新 systemd timer"; fi
+        sleep 1;;
+      2)
+        echo
+        echo "请输入结果保留天数，只填数字。"
+        echo "例：保留 30 天就输入 30；保留 90 天就输入 90。"
+        local nr
+        nr=$(read_positive_int "保留天数" "$retain") || { sleep 1; continue; }
+        printf 'HOUR=%s
+MINUTE=%s
+RETAIN_DAYS=%s
+' "$hour" "$minute" "$nr" > "$YABS_SETTING"
+        ok "已设置保留 ${nr} 天"
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_yabs(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}===== 定期 YABS 测试 =====${C_RESET}  状态: $(yabs_status_text)"
+    echo "  1) 查看结果"
+    echo "  2) 开启定时（默认每天 $(yabs_hour):$(yabs_minute) ±30分钟）"
+    echo "  3) 立即测试一次"
+    echo "  4) 设置"
+    echo "  5) 关闭定时"
+    echo "  0) 返回主菜单"
+    read -rp "选择: " s
+    case "$s" in
+      1) menu_yabs_view;;
+      2) install_yabs_timer; pause;;
+      3) echo "YABS 测试中, 请稍候..."; run_yabs_once; ok "完成"; pause;;
+      4) menu_yabs_settings;;
+      5) disable_yabs_timer; pause;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+
+# ============================================================
+#  Bench.sh 测试菜单
+# ============================================================
+bench_view_one(){
+  local fpath="$1"
+  while true; do
+    clear
+    cat "$fpath"
+    echo
+    echo "  ----------------------------------------------"
+    if [ "$(dirname "$fpath")" = "$BENCH_KEEP" ]; then
+      echo -e "  当前状态: ${C_YEL}[永久保留]${C_RESET}"
+      echo "  1) 取消长期保留 (移回普通, 受保留天数管理)"
+    else
+      echo -e "  当前状态: ${C_GRY}普通 (到期自动清理)${C_RESET}"
+      echo "  1) 设为长期保留 (永不自动删除)"
+    fi
+    echo "  0) 返回"
+    read -rp "选择: " act
+    case "$act" in
+      1)
+        local base; base="$(basename "$fpath")"
+        if [ "$(dirname "$fpath")" = "$BENCH_KEEP" ]; then
+          mv -f "$fpath" "${BENCH_DATA}/${base}" && { ok "已取消长期保留"; fpath="${BENCH_DATA}/${base}"; }
+        else
+          mv -f "$fpath" "${BENCH_KEEP}/${base}" && { ok "已设为长期保留"; fpath="${BENCH_KEEP}/${base}"; }
+        fi
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_bench_view(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}== Bench.sh 测试结果 ==${C_RESET}"
+    local -a files=() iskeep=()
+    local idx=0 p
+    while IFS=$'\t' read -r _ p; do
+      [ -z "$p" ] && continue
+      idx=$((idx+1)); files+=("$p")
+      if [ "$(dirname "$p")" = "$BENCH_KEEP" ]; then iskeep+=("1"); else iskeep+=("0"); fi
+    done < <( { ls -1t "${BENCH_DATA}"/*.log "${BENCH_KEEP}"/*.log 2>/dev/null | while IFS= read -r p; do
+                 [ -e "$p" ] && printf '%s\t%s\n' "$(stat -c %Y "$p")" "$p"
+               done; } | sort -t$'\t' -k1,1nr )
+    if [ "$idx" -eq 0 ]; then echo "暂无 Bench.sh 测试结果。"; pause; return; fi
+    echo -e "  ${C_CYN}1) 全部记录·按顺序展示${C_RESET}"
+    local k tag
+    for k in $(seq 0 $((idx-1))); do
+      if [ "${iskeep[$k]}" = "1" ]; then tag=" ${C_YEL}[永久]${C_RESET}"; else tag=""; fi
+      printf "  %d) %s%b\n" "$((k+2))" "$(basename "${files[$k]}" .log)" "$tag"
+    done
+    echo "  0) 返回"
+    read -rp "选择编号: " sel
+    case "$sel" in
+      0|"") return;;
+      1)
+        clear
+        local j t2
+        # 全部查看：最新的显示在最上面，最早的显示在最底下。
+        # files[] 在生成时已经按 mtime 倒序排列，这里保持 0 -> idx-1 顺序输出。
+        for j in $(seq 0 $((idx-1))); do
+          if [ "${iskeep[$j]}" = "1" ]; then t2=" [永久]"; else t2=""; fi
+          echo -e "\n========== $(basename "${files[$j]}" .log)${t2} =========="
+          echo
+          cat "${files[$j]}"
+        done
+        pause;;
+      *)
+        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 2 ] && [ "$sel" -le "$((idx+1))" ]; then
+          bench_view_one "${files[$((sel-2))]}"
+        else return; fi;;
+    esac
+  done
+}
+
+menu_bench_settings(){
+  init_dirs
+  while true; do
+    clear
+    local hour minute retain
+    hour="$(bench_hour)"
+    minute="$(bench_minute)"
+    retain=$(grep -E '^RETAIN_DAYS=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+    echo -e "${C_BOLD}== Bench.sh 设置 ==${C_RESET}"
+    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  结果保留: ${retain} 天"
+    echo
+    echo "  设置说明：这里只需要输入数字。"
+    echo "  示例：想设置为凌晨 5 点整，就选 1 后：小时输入 5，分钟输入 0。"
+    echo "        因为带 ±30分钟，实际会在 04:30-05:30 之间随机执行。"
+    echo
+    echo "  1) 修改定时时间（默认 05:00 ±30分钟）"
+    echo "  2) 修改保留天数"
+    echo "  0) 返回"
+    read -rp "选择: " s
+    case "$s" in
+      1)
+        echo
+        echo "请输入中心时间，只填数字，不要输入冒号。"
+        echo "例：05:00 -> 小时填 5，分钟填 0"
+        local nh nm
+        nh=$(read_int_range "小时 0-23" "$hour" 0 23) || { sleep 1; continue; }
+        nm=$(read_int_range "分钟 0-59" "$minute" 0 59) || { sleep 1; continue; }
+        printf 'HOUR=%02d
+MINUTE=%02d
+RETAIN_DAYS=%s
+' "$nh" "$nm" "$retain" > "$BENCH_SETTING"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        if bench_enabled; then install_bench_timer >/dev/null; ok "已同步更新 systemd timer"; fi
+        sleep 1;;
+      2)
+        echo
+        echo "请输入结果保留天数，只填数字。"
+        echo "例：保留 30 天就输入 30；保留 90 天就输入 90。"
+        local nr
+        nr=$(read_positive_int "保留天数" "$retain") || { sleep 1; continue; }
+        printf 'HOUR=%s
+MINUTE=%s
+RETAIN_DAYS=%s
+' "$hour" "$minute" "$nr" > "$BENCH_SETTING"
+        ok "已设置保留 ${nr} 天"
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_bench(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}===== 定期 Bench.sh 测试 =====${C_RESET}  状态: $(bench_status_text)"
+    echo "  1) 查看结果"
+    echo "  2) 开启定时（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
+    echo "  3) 立即测试一次"
+    echo "  4) 设置"
+    echo "  5) 关闭定时"
+    echo "  0) 返回主菜单"
+    read -rp "选择: " s
+    case "$s" in
+      1) menu_bench_view;;
+      2) install_bench_timer; pause;;
+      3) echo "Bench.sh 测试中，请稍候..."; run_bench_once; ok "完成"; pause;;
+      4) menu_bench_settings;;
+      5) disable_bench_timer; pause;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+
+# ============================================================
+#  NodeQuality 菜单
+# ============================================================
+nq_view_one(){
+  local fpath="$1"
+  while true; do
+    clear
+    cat "$fpath"
+    echo
+    echo "  ----------------------------------------------"
+    if [ "$(dirname "$fpath")" = "$NQ_KEEP" ]; then
+      echo -e "  当前状态: ${C_YEL}[永久保留]${C_RESET}"
+      echo "  1) 取消长期保留 (移回普通, 受保留天数管理)"
+    else
+      echo -e "  当前状态: ${C_GRY}普通 (到期自动清理)${C_RESET}"
+      echo "  1) 设为长期保留 (永不自动删除)"
+    fi
+    echo "  0) 返回"
+    read -rp "选择: " act
+    case "$act" in
+      1)
+        local base; base="$(basename "$fpath")"
+        if [ "$(dirname "$fpath")" = "$NQ_KEEP" ]; then
+          mv -f "$fpath" "${NQ_DATA}/${base}" && { ok "已取消长期保留"; fpath="${NQ_DATA}/${base}"; }
+        else
+          mv -f "$fpath" "${NQ_KEEP}/${base}" && { ok "已设为长期保留"; fpath="${NQ_KEEP}/${base}"; }
+        fi
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_nq_view(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}== NodeQuality 检测结果链接 ==${C_RESET}"
+    local -a files=() iskeep=()
+    local idx=0 p
+    while IFS=$'\t' read -r _ p; do
+      [ -z "$p" ] && continue
+      idx=$((idx+1)); files+=("$p")
+      if [ "$(dirname "$p")" = "$NQ_KEEP" ]; then iskeep+=("1"); else iskeep+=("0"); fi
+    done < <( { ls -1t "${NQ_DATA}"/*.log "${NQ_KEEP}"/*.log 2>/dev/null | while IFS= read -r p; do
+                 [ -e "$p" ] && printf '%s\t%s\n' "$(stat -c %Y "$p")" "$p"
+               done; } | sort -t$'\t' -k1,1nr )
+    if [ "$idx" -eq 0 ]; then echo "暂无 NodeQuality 检测结果链接。"; pause; return; fi
+    echo -e "  ${C_CYN}1) 全部记录·按顺序展示${C_RESET}"
+    local k tag
+    for k in $(seq 0 $((idx-1))); do
+      if [ "${iskeep[$k]}" = "1" ]; then tag=" ${C_YEL}[永久]${C_RESET}"; else tag=""; fi
+      printf "  %d) %s%b\n" "$((k+2))" "$(basename "${files[$k]}" .log)" "$tag"
+    done
+    echo "  0) 返回"
+    read -rp "选择编号: " sel
+    case "$sel" in
+      0|"") return;;
+      1)
+        clear
+        local j t2
+        for j in $(seq 0 $((idx-1))); do
+          if [ "${iskeep[$j]}" = "1" ]; then t2=" [永久]"; else t2=""; fi
+          echo -e "\n========== $(basename "${files[$j]}" .log)${t2} =========="
+          echo
+          cat "${files[$j]}"
+        done
+        pause;;
+      *)
+        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 2 ] && [ "$sel" -le "$((idx+1))" ]; then
+          nq_view_one "${files[$((sel-2))]}"
+        else return; fi;;
+    esac
+  done
+}
+
+menu_nq_settings(){
+  init_dirs
+  while true; do
+    clear
+    local interval hour minute ehour eminute start_date retain
+    interval="$(nq_interval_days)"
+    hour="$(nq_hour)"; minute="$(nq_minute)"
+    ehour="$(nq_evening_hour)"; eminute="$(nq_evening_minute)"
+    start_date="$(nq_start_date)"
+    retain=$(grep -E '^RETAIN_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
+    echo -e "${C_BOLD}== NodeQuality 设置 ==${C_RESET}"
+    echo "  当前循环: 从 ${start_date} 开始，每 ${interval} 天检测一次"
+    echo "  当前定时: 当天 ${hour}:${minute} ±30分钟 + 晚高峰 ${ehour}:${eminute} ±30分钟"
+    echo "  结果保留: ${retain} 天"
+    echo
+    echo "  设置说明：这里只需要输入数字。"
+    echo "  示例1：想每 7 天测一次，就选 1 后输入 7。"
+    echo "  示例2：想早上 6 点测，就选 2 后：小时输入 6，分钟输入 0。"
+    echo "  示例3：想晚高峰 22 点测，就选 3 后：小时输入 22，分钟输入 0。"
+    echo "  说明：±30分钟表示 06:00 会在 05:30-06:30 间随机执行。"
+    echo
+    echo "  1) 修改检测间隔天数（默认 7）"
+    echo "  2) 修改白天检测时间（默认 06:00 ±30分钟）"
+    echo "  3) 修改晚高峰检测时间（默认 22:00 ±30分钟）"
+    echo "  4) 修改保留天数"
+    echo "  0) 返回"
+    read -rp "选择: " s
+    case "$s" in
+      1)
+        echo
+        echo "请输入检测间隔天数，只填数字。"
+        echo "例：每 7 天测一次就输入 7；每 3 天测一次就输入 3。"
+        local ni
+        ni=$(read_positive_int "间隔天数" "$interval") || { sleep 1; continue; }
+        nq_write_settings "$ni" "$hour" "$minute" "$ehour" "$eminute" "$start_date" "$retain"
+        ok "已设置为每 ${ni} 天检测一次"
+        if nq_enabled; then install_nq_timer >/dev/null; ok "已同步更新 systemd timer，并从今天重新开始循环"; fi
+        sleep 1;;
+      2)
+        echo
+        echo "请输入白天检测的中心时间，只填数字，不要输入冒号。"
+        echo "例：06:00 -> 小时填 6，分钟填 0；实际 05:30-06:30 随机执行。"
+        local nh nm
+        nh=$(read_int_range "小时 0-23" "$hour" 0 23) || { sleep 1; continue; }
+        nm=$(read_int_range "分钟 0-59" "$minute" 0 59) || { sleep 1; continue; }
+        nq_write_settings "$interval" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$ehour" "$eminute" "$start_date" "$retain"
+        ok "已设置白天检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        if nq_enabled; then install_nq_timer >/dev/null; ok "已同步更新 systemd timer，并从今天重新开始循环"; fi
+        sleep 1;;
+      3)
+        echo
+        echo "请输入晚高峰检测的中心时间，只填数字，不要输入冒号。"
+        echo "例：22:00 -> 小时填 22，分钟填 0；实际 21:30-22:30 随机执行。"
+        local nh nm
+        nh=$(read_int_range "小时 0-23" "$ehour" 0 23) || { sleep 1; continue; }
+        nm=$(read_int_range "分钟 0-59" "$eminute" 0 59) || { sleep 1; continue; }
+        nq_write_settings "$interval" "$hour" "$minute" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$start_date" "$retain"
+        ok "已设置晚高峰检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        if nq_enabled; then install_nq_timer >/dev/null; ok "已同步更新 systemd timer，并从今天重新开始循环"; fi
+        sleep 1;;
+      4)
+        echo
+        echo "请输入结果保留天数，只填数字。"
+        echo "例：保留 30 天就输入 30；保留 90 天就输入 90。"
+        local nr
+        nr=$(read_positive_int "保留天数" "$retain") || { sleep 1; continue; }
+        nq_write_settings "$interval" "$hour" "$minute" "$ehour" "$eminute" "$start_date" "$nr"
+        ok "已设置保留 ${nr} 天"
+        sleep 1;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+menu_nq(){
+  while true; do
+    clear
+    echo -e "${C_BOLD}===== 定期 NodeQuality 检测 =====${C_RESET}  状态: $(nq_status_text)"
+    echo "  1) 查看结果"
+    echo "  2) 开启定时（默认每 $(nq_interval_days) 天：$(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    echo "  3) 立即测试一次"
+    echo "  4) 设置"
+    echo "  5) 关闭定时"
+    echo "  0) 返回主菜单"
+    read -rp "选择: " s
+    case "$s" in
+      1) menu_nq_view;;
+      2) install_nq_timer; pause;;
+      3) echo "NodeQuality 检测中，请稍候..."; run_nq_once; ok "完成，已只保存 nodequality.com 结果链接"; pause;;
+      4) menu_nq_settings;;
+      5) disable_nq_timer; pause;;
+      0|"") return;;
+      *) return;;
+    esac
+  done
+}
+
+
+menu_start_guide(){
+  clear
+  echo -e "${C_BOLD}===== 开启引导 =====${C_RESET}"
+  echo
+  echo "使用方式："
+  echo "  - 直接回车：按默认推荐开启"
+  echo "  - 输入 1：逐个功能单独引导， 每项输入数字 1=开启，2=不开启"
+  echo
+  echo "默认推荐开启："
+  echo "  - 定期测 IP 质量（每天 03:00 ±30分钟）"
+  echo "  - 定期 YABS 测试（每天 04:00 ±30分钟；开启前会自动检查内存/swap）"
+  echo
+  echo "默认不自动开启，需要按需手动或在单独引导里开启："
+  echo "  - 定期 Ping 监控"
+  echo "  - 定期 Bench.sh 测试（每天 05:00 ±30分钟）"
+  echo "  - 定期 NodeQuality 检测（每 7 天 06:00 ±30分钟 + 同日 22:00 ±30分钟）"
+  echo
+  read -rp "直接回车按默认开启；输入 1 进入逐个引导；输入 2 取消: " ans
+
+  if [ -z "$ans" ]; then
+    echo
+    echo "正在开启：定期测 IP 质量..."
+    if install_ipquality_timer; then
+      ok "定期测 IP 质量已开启"
+    else
+      err "定期测 IP 质量开启失败"
+    fi
+
+    echo
+    echo "正在开启：定期 YABS 测试..."
+    if install_yabs_timer; then
+      ok "定期 YABS 测试已开启"
+    else
+      err "定期 YABS 测试开启失败"
+    fi
+
+    echo
+    echo -e "${C_BOLD}引导完成。${C_RESET}"
+    echo "默认已处理："
+    echo "  - 定期测 IP 质量"
+    echo "  - 定期 YABS 测试"
+    echo
+    echo "提醒：另外三个不会自动开启，需要你在主菜单里手动打开："
+    echo "  2) 定期 Ping 监控"
+    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
+    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    pause
+    return
+  fi
+
+  if [ "$ans" = "2" ]; then
+    echo "已取消开启引导。"
+    pause
+    return
+  fi
+
+  if [ "$ans" != "1" ]; then
+    echo "输入无效，已返回主菜单。"
+    pause
+    return
+  fi
+
+  clear
+  echo -e "${C_BOLD}===== 逐个功能开启引导 =====${C_RESET}"
+  echo
+  echo "说明：下面每个功能都只输入数字。"
+  echo "  1 = 开启"
+  echo "  2 = 不开启"
+  echo "  直接回车 = 不开启这一项"
+  echo
+
+  local enabled_list=""
+  local skipped_list=""
+  local choice=""
+
+  guide_enable_one(){
+    local title="$1"
+    local hint="$2"
+    local cmd="$3"
+    echo
+    echo "是否开启：${title}"
+    echo "说明：${hint}"
+    read -rp "请输入 1 开启，2 不开启: " choice
+    case "$choice" in
+      1)
+        echo "正在开启：${title}..."
+        if "$cmd"; then
+          ok "${title} 已开启"
+          enabled_list="${enabled_list}\n  - ${title}"
+        else
+          err "${title} 开启失败"
+          skipped_list="${skipped_list}\n  - ${title}（开启失败）"
+        fi
+        ;;
+      2|"")
+        echo "已跳过：${title}"
+        skipped_list="${skipped_list}\n  - ${title}"
+        ;;
+      *)
+        echo "输入无效，按不开启处理：${title}"
+        skipped_list="${skipped_list}\n  - ${title}"
+        ;;
+    esac
+  }
+
+  guide_enable_one "定期 Ping 监控" "用于持续记录目标延迟/丢包；可先到 Ping 菜单添加目标。" install_ping_service
+  guide_enable_one "定期测 IP 质量" "默认每天 03:00 ±30分钟执行。" install_ipquality_timer
+  guide_enable_one "定期 YABS 测试" "默认每天 04:00 ±30分钟执行；开启前会自动检查内存/swap。" install_yabs_timer
+  guide_enable_one "定期 Bench.sh 测试" "默认每天 05:00 ±30分钟执行。" install_bench_timer
+  guide_enable_one "定期 NodeQuality 检测" "默认每 7 天循环；开启当天开始算，同一天 06:00 ±30分钟和 22:00 ±30分钟各测一次。" install_nq_timer
+
+  echo
+  echo -e "${C_BOLD}逐个引导完成。${C_RESET}"
+  if [ -n "$enabled_list" ]; then
+    echo "已开启："
+    printf "%b\n" "$enabled_list"
+  else
+    echo "已开启：无"
+  fi
+  echo
+  if [ -n "$skipped_list" ]; then
+    echo "未开启/跳过："
+    printf "%b\n" "$skipped_list"
+  fi
+  pause
 }
 
 # ============================================================
@@ -572,18 +1754,29 @@ main_menu(){
   while true; do
     clear
     echo -e "${C_BOLD}╔══════════════════════════════╗${C_RESET}"
-    echo -e "${C_BOLD}      综合服务器工具箱 v1${C_RESET}"
+    echo -e "${C_BOLD}║          小鸡别太闲          ║${C_RESET}"
     echo -e "${C_BOLD}╚══════════════════════════════╝${C_RESET}"
     echo -e "  定期 Ping 监控 : $(ping_status_text)"
     echo -e "  定期测 IP 质量 : $(ipq_status_text)"
+    echo -e "  定期 YABS 测试 : $(yabs_status_text)"
+    echo -e "  定期 Bench.sh 测试 : $(bench_status_text)"
+    echo -e "  定期 NodeQuality 检测 : $(nq_status_text)"
     echo "  ------------------------------"
-    echo "  1) 定期 Ping 监控"
-    echo "  2) 定期测 IP 质量"
+    echo "  1) 开启引导"
+    echo "  2) 定期 Ping 监控"
+    echo "  3) 定期测 IP 质量（默认每天 $(ipq_hour):$(ipq_minute) ±30分钟）"
+    echo "  4) 定期 YABS 测试（默认每天 $(yabs_hour):$(yabs_minute) ±30分钟）"
+    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
+    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
     echo "  0) 退出"
     read -rp "选择: " s
     case "$s" in
-      1) menu_ping;;
-      2) menu_ipq;;
+      1) menu_start_guide;;
+      2) menu_ping;;
+      3) menu_ipq;;
+      4) menu_yabs;;
+      5) menu_bench;;
+      6) menu_nq;;
       0|"") clear; exit 0;;
       *) :;;
     esac
@@ -596,6 +1789,11 @@ main_menu(){
 case "${1:-}" in
   __ping_daemon) run_ping_daemon;;
   __ipq_once)    run_ipquality_once;;
+  __yabs_once)   run_yabs_once;;
+  __bench_once)  run_bench_once;;
+  __nq_once)     run_nq_once;;
+  __nq_scheduled) run_nq_scheduled;;
+  __strip_clear) shift; strip_clear "$1";;
   *)
     if [ "$(id -u)" -ne 0 ]; then
       err "请用 root 运行 (sudo bash $0)"; exit 1
