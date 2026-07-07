@@ -43,15 +43,14 @@ ok(){ echo -e "${C_GRN}[OK]${C_RESET} $*"; }
 pause(){ read -rp "Press Enter to continue..." _; }
 safe_name(){ echo "$1" | sed 's#[/:*?"<>| ]#_#g'; }
 
-timer_base_pm30(){ # print HH:MM for center time minus 30 minutes; used with RandomizedDelaySec=1h for +/-30 minutes
-  local h="$1" m="$2"
-  python3 - "$h" "$m" <<'PYT'
-import sys
-from datetime import datetime, timedelta
-h=int(sys.argv[1]); m=int(sys.argv[2])
-dt=datetime(2000,1,1,h,m)-timedelta(minutes=30)
-print(dt.strftime('%H:%M'))
-PYT
+timer_base_pm30(){ # print HH:MM for center time minus 30 minutes; used with RandomizedDelaySec=1h for +/-30 minutes; pure bash, no python3 required
+  local h="$1" m="$2" total
+  h=$((10#$h)); m=$((10#$m))
+  total=$((h * 60 + m - 30))
+  while [ "$total" -lt 0 ]; do total=$((total + 1440)); done
+  total=$((total % 1440))
+  printf '%02d:%02d
+' $((total / 60)) $((total % 60))
 }
 timer_random_line(){
   echo "RandomizedDelaySec=1h"
@@ -560,7 +559,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-ipquality.timer
+  if ! systemctl enable --now sshtool-ipquality.timer; then
+    err "Failed to enable Scheduled IP Quality Test. Please run: systemctl status sshtool-ipquality.timer"
+    return 1
+  fi
   ok "Scheduled IP Quality Test enabled (daily ${hour}:${minute} +/-30 minutes)"
 }
 disable_ipquality_timer(){
@@ -601,7 +603,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-yabs.timer
+  if ! systemctl enable --now sshtool-yabs.timer; then
+    err "Failed to enable Scheduled YABS Test. Please run: systemctl status sshtool-yabs.timer"
+    return 1
+  fi
   ok "Scheduled YABS Test enabled (daily ${hour}:${minute} +/-30 minutes)"
 }
 disable_yabs_timer(){
@@ -641,7 +646,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-bench.timer
+  if ! systemctl enable --now sshtool-bench.timer; then
+    err "Failed to enable Scheduled Bench.sh Test. Please run: systemctl status sshtool-bench.timer"
+    return 1
+  fi
   ok "Scheduled Bench.sh Test enabled (daily ${hour}:${minute} +/-30 minutes)"
 }
 disable_bench_timer(){
@@ -687,7 +695,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sshtool-nodequality.timer
+  if ! systemctl enable --now sshtool-nodequality.timer; then
+    err "Failed to enable Scheduled NodeQuality Test. Please run: systemctl status sshtool-nodequality.timer"
+    return 1
+  fi
   ok "Scheduled NodeQuality Test enabled (starting today, every ${interval} days: ${hour}:${minute} +/-30 minutes + same day ${ehour}:${eminute} +/-30 minutes)"
 }
 disable_nq_timer(){
@@ -1627,6 +1638,7 @@ menu_start_guide(){
   echo "How to use: "
   echo "  - Press Enter: enable recommended defaults"
   echo "  - Enter 1: guided setup per feature; for each item enter number 1=enable, 2=do not enable"
+  echo "  - Enter 3: enable all five features"
   echo
   echo "Recommended defaults: "
   echo "  - Scheduled IP Quality Test (daily 03:00 +/-30 minutes)"
@@ -1637,7 +1649,7 @@ menu_start_guide(){
   echo "  - Scheduled Bench.sh Test (daily 05:00 +/-30 minutes)"
   echo "  - Scheduled NodeQuality Test (every 7 days 06:00 +/-30 minutes + same day 22:00 +/-30 minutes)"
   echo
-  read -rp "Press Enter to use defaults; enter 1 for guided setup; enter 2 to cancel: " ans
+  read -rp "Press Enter to use defaults; enter 1 for guided setup; enter 2 to cancel; enter 3 to enable all: " ans
 
   if [ -z "$ans" ]; then
     echo
@@ -1666,6 +1678,62 @@ menu_start_guide(){
     echo "  2) Scheduled Ping Monitor"
     echo "  5) Scheduled Bench.sh Test (default daily $(bench_hour):$(bench_minute) +/-30 minutes)"
     echo "  6) Scheduled NodeQuality Test (default every $(nq_interval_days) days $(nq_hour):$(nq_minute) +/-30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +/-30 minutes)"
+    pause
+    return
+  fi
+
+  if [ "$ans" = "3" ]; then
+    echo
+    echo -e "${C_BOLD}Enabling all five features...${C_RESET}"
+
+    echo
+    echo "Enabling: Scheduled Ping Monitor..."
+    if install_ping_service; then
+      ok "Scheduled Ping Monitor enabled"
+    else
+      err "Scheduled Ping Monitor failed to enable"
+    fi
+
+    echo
+    echo "Enabling: Scheduled IP Quality Test..."
+    if install_ipquality_timer; then
+      ok "Scheduled IP Quality Test enabled"
+    else
+      err "Scheduled IP Quality Test failed to enable"
+    fi
+
+    echo
+    echo "Enabling: Scheduled YABS Test..."
+    if install_yabs_timer; then
+      ok "Scheduled YABS Test enabled"
+    else
+      err "Scheduled YABS Test failed to enable"
+    fi
+
+    echo
+    echo "Enabling: Scheduled Bench.sh Test..."
+    if install_bench_timer; then
+      ok "Scheduled Bench.sh Test enabled"
+    else
+      err "Scheduled Bench.sh Test failed to enable"
+    fi
+
+    echo
+    echo "Enabling: Scheduled NodeQuality Test..."
+    if install_nq_timer; then
+      ok "Scheduled NodeQuality Test enabled"
+    else
+      err "Scheduled NodeQuality Test failed to enable"
+    fi
+
+    echo
+    echo -e "${C_BOLD}Enable-all process completed.${C_RESET}"
+    echo "Tried to enable:"
+    echo "  - Scheduled Ping Monitor"
+    echo "  - Scheduled IP Quality Test"
+    echo "  - Scheduled YABS Test"
+    echo "  - Scheduled Bench.sh Test"
+    echo "  - Scheduled NodeQuality Test"
     pause
     return
   fi
