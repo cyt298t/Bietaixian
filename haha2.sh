@@ -1637,6 +1637,7 @@ menu_start_guide(){
   echo "使用方式："
   echo "  - 直接回车：按默认推荐开启"
   echo "  - 输入 1：逐个功能单独引导， 每项输入数字 1=开启，2=不开启"
+  echo "  - 输入 3：全开，五个功能全部开启"
   echo
   echo "默认推荐开启："
   echo "  - 定期测 IP 质量（每天 03:00 ±30分钟）"
@@ -1647,7 +1648,7 @@ menu_start_guide(){
   echo "  - 定期 Bench.sh 测试（每天 05:00 ±30分钟）"
   echo "  - 定期 NodeQuality 检测（每 7 天 06:00 ±30分钟 + 同日 22:00 ±30分钟）"
   echo
-  read -rp "直接回车按默认开启；输入 1 进入逐个引导；输入 2 取消: " ans
+  read -rp "直接回车按默认开启；输入 1 进入逐个引导；输入 2 取消；输入 3 全开: " ans
 
   if [ -z "$ans" ]; then
     echo
@@ -1676,6 +1677,62 @@ menu_start_guide(){
     echo "  2) 定期 Ping 监控"
     echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
     echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    pause
+    return
+  fi
+
+  if [ "$ans" = "3" ]; then
+    echo
+    echo -e "${C_BOLD}正在全开五个功能...${C_RESET}"
+
+    echo
+    echo "正在开启：定期 Ping 监控..."
+    if install_ping_service; then
+      ok "定期 Ping 监控已开启"
+    else
+      err "定期 Ping 监控开启失败"
+    fi
+
+    echo
+    echo "正在开启：定期测 IP 质量..."
+    if install_ipquality_timer; then
+      ok "定期测 IP 质量已开启"
+    else
+      err "定期测 IP 质量开启失败"
+    fi
+
+    echo
+    echo "正在开启：定期 YABS 测试..."
+    if install_yabs_timer; then
+      ok "定期 YABS 测试已开启"
+    else
+      err "定期 YABS 测试开启失败"
+    fi
+
+    echo
+    echo "正在开启：定期 Bench.sh 测试..."
+    if install_bench_timer; then
+      ok "定期 Bench.sh 测试已开启"
+    else
+      err "定期 Bench.sh 测试开启失败"
+    fi
+
+    echo
+    echo "正在开启：定期 NodeQuality 检测..."
+    if install_nq_timer; then
+      ok "定期 NodeQuality 检测已开启"
+    else
+      err "定期 NodeQuality 检测开启失败"
+    fi
+
+    echo
+    echo -e "${C_BOLD}全开处理完成。${C_RESET}"
+    echo "已尝试开启："
+    echo "  - 定期 Ping 监控"
+    echo "  - 定期测 IP 质量"
+    echo "  - 定期 YABS 测试"
+    echo "  - 定期 Bench.sh 测试"
+    echo "  - 定期 NodeQuality 检测"
     pause
     return
   fi
