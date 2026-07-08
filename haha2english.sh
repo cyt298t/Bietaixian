@@ -43,17 +43,17 @@ ok(){ echo -e "${C_GRN}[OK]${C_RESET} $*"; }
 pause(){ read -rp "Press Enter to continue..." _; }
 safe_name(){ echo "$1" | sed 's#[/:*?"<>| ]#_#g'; }
 
-timer_base_pm30(){ # print HH:MM for center time minus 30 minutes; used with RandomizedDelaySec=1h for +/-30 minutes; pure bash, no python3 required
+timer_base_pm30(){ # print the configured HH:MM itself; used with RandomizedDelaySec=30min for +0~30 minutes randomized delay; pure bash, no python3 required
   local h="$1" m="$2" total
   h=$((10#$h)); m=$((10#$m))
-  total=$((h * 60 + m - 30))
+  total=$((h * 60 + m))
   while [ "$total" -lt 0 ]; do total=$((total + 1440)); done
   total=$((total % 1440))
   printf '%02d:%02d
 ' $((total / 60)) $((total % 60))
 }
 timer_random_line(){
-  echo "RandomizedDelaySec=1h"
+  echo "RandomizedDelaySec=30min"
 }
 
 read_int_range(){
@@ -552,7 +552,7 @@ Description=sshtool IP quality daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -563,7 +563,7 @@ EOF
     err "Failed to enable Scheduled IP Quality Test. Please run: systemctl status sshtool-ipquality.timer"
     return 1
   fi
-  ok "Scheduled IP Quality Test enabled (daily ${hour}:${minute} +/-30 minutes)"
+  ok "Scheduled IP Quality Test enabled (daily ${hour}:${minute} +30 minutes)"
 }
 disable_ipquality_timer(){
   systemctl disable --now sshtool-ipquality.timer 2>/dev/null
@@ -596,7 +596,7 @@ Description=sshtool YABS daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -607,7 +607,7 @@ EOF
     err "Failed to enable Scheduled YABS Test. Please run: systemctl status sshtool-yabs.timer"
     return 1
   fi
-  ok "Scheduled YABS Test enabled (daily ${hour}:${minute} +/-30 minutes)"
+  ok "Scheduled YABS Test enabled (daily ${hour}:${minute} +30 minutes)"
 }
 disable_yabs_timer(){
   systemctl disable --now sshtool-yabs.timer 2>/dev/null
@@ -639,7 +639,7 @@ Description=sshtool Bench.sh daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -650,7 +650,7 @@ EOF
     err "Failed to enable Scheduled Bench.sh Test. Please run: systemctl status sshtool-bench.timer"
     return 1
   fi
-  ok "Scheduled Bench.sh Test enabled (daily ${hour}:${minute} +/-30 minutes)"
+  ok "Scheduled Bench.sh Test enabled (daily ${hour}:${minute} +30 minutes)"
 }
 disable_bench_timer(){
   systemctl disable --now sshtool-bench.timer 2>/dev/null
@@ -688,7 +688,7 @@ Description=sshtool NodeQuality interval timer
 [Timer]
 OnCalendar=*-*-* ${b1h}:${b1m}:00
 OnCalendar=*-*-* ${b2h}:${b2m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -699,7 +699,7 @@ EOF
     err "Failed to enable Scheduled NodeQuality Test. Please run: systemctl status sshtool-nodequality.timer"
     return 1
   fi
-  ok "Scheduled NodeQuality Test enabled (starting today, every ${interval} days: ${hour}:${minute} +/-30 minutes + same day ${ehour}:${eminute} +/-30 minutes)"
+  ok "Scheduled NodeQuality Test enabled (starting today, every ${interval} days: ${hour}:${minute} +30 minutes + same day ${ehour}:${eminute} +30 minutes)"
 }
 disable_nq_timer(){
   systemctl disable --now sshtool-nodequality.timer 2>/dev/null
@@ -1076,14 +1076,14 @@ menu_ipq_settings(){
     minute="$(ipq_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== IP Quality Settings ==${C_RESET}"
-    echo "  Current schedule: daily ${hour}:${minute} +/-30 minutes"
+    echo "  Current schedule: daily ${hour}:${minute} +30 minutes"
     echo "  Result retention: ${retain} days"
     echo
     echo "  Settings guide: only numbers are needed here."
     echo "  Example: to set it to 3:00 AM, choose 1, then enter hour 3 and minute 0."
-    echo "        Because +/-30 minutes is enabled, it will run randomly between 02:30 and 03:30."
+    echo "        Because +30 minutes is enabled, it will run randomly between 03:00 and 03:30."
     echo
-    echo "  1) Change schedule time (default 03:00 +/-30 minutes)"
+    echo "  1) Change schedule time (default 03:00 +30 minutes)"
     echo "  2) Change retention days"
     echo "  0) Back"
     read -rp "Choice: " s
@@ -1099,7 +1099,7 @@ menu_ipq_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$IPQ_SETTING"
-        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +/-30 minutes"
+        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30 minutes"
         if ipquality_enabled; then install_ipquality_timer >/dev/null; ok "systemd timer updated"; fi
         sleep 1;;
       2)
@@ -1125,7 +1125,7 @@ menu_ipq(){
     clear
     echo -e "${C_BOLD}===== Scheduled IP Quality Test =====${C_RESET}  Status: $(ipq_status_text)"
     echo "  1) View results"
-    echo "  2) Enable schedule (default daily $(ipq_hour):$(ipq_minute) +/-30 minutes)"
+    echo "  2) Enable schedule (default daily $(ipq_hour):$(ipq_minute) +30 minutes)"
     echo "  3) Run once now"
     echo "  4) Settings"
     echo "  5) Disable schedule"
@@ -1233,14 +1233,14 @@ menu_yabs_settings(){
     minute="$(yabs_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== YABS Settings ==${C_RESET}"
-    echo "  Current schedule: daily ${hour}:${minute} +/-30 minutes"
+    echo "  Current schedule: daily ${hour}:${minute} +30 minutes"
     echo "  Result retention: ${retain} days"
     echo
     echo "  Settings guide: only numbers are needed here."
     echo "  Example: to set it to 4:00 AM, choose 1, then enter hour 4 and minute 0."
-    echo "        Because +/-30 minutes is enabled, it will run randomly between 03:30 and 04:30."
+    echo "        Because +30 minutes is enabled, it will run randomly between 04:00 and 04:30."
     echo
-    echo "  1) Change schedule time (default 04:00 +/-30 minutes)"
+    echo "  1) Change schedule time (default 04:00 +30 minutes)"
     echo "  2) Change retention days"
     echo "  0) Back"
     read -rp "Choice: " s
@@ -1256,7 +1256,7 @@ menu_yabs_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$YABS_SETTING"
-        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +/-30 minutes"
+        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30 minutes"
         if yabs_enabled; then install_yabs_timer >/dev/null; ok "systemd timer updated"; fi
         sleep 1;;
       2)
@@ -1282,7 +1282,7 @@ menu_yabs(){
     clear
     echo -e "${C_BOLD}===== Scheduled YABS Test =====${C_RESET}  Status: $(yabs_status_text)"
     echo "  1) View results"
-    echo "  2) Enable schedule (default daily $(yabs_hour):$(yabs_minute) +/-30 minutes)"
+    echo "  2) Enable schedule (default daily $(yabs_hour):$(yabs_minute) +30 minutes)"
     echo "  3) Run once now"
     echo "  4) Settings"
     echo "  5) Disable schedule"
@@ -1388,14 +1388,14 @@ menu_bench_settings(){
     minute="$(bench_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== Bench.sh Settings ==${C_RESET}"
-    echo "  Current schedule: daily ${hour}:${minute} +/-30 minutes"
+    echo "  Current schedule: daily ${hour}:${minute} +30 minutes"
     echo "  Result retention: ${retain} days"
     echo
     echo "  Settings guide: only numbers are needed here."
     echo "  Example: to set it to 5:00 AM, choose 1, then enter hour 5 and minute 0."
-    echo "        Because +/-30 minutes is enabled, it will run randomly between 04:30 and 05:30."
+    echo "        Because +30 minutes is enabled, it will run randomly between 05:00 and 05:30."
     echo
-    echo "  1) Change schedule time (default 05:00 +/-30 minutes)"
+    echo "  1) Change schedule time (default 05:00 +30 minutes)"
     echo "  2) Change retention days"
     echo "  0) Back"
     read -rp "Choice: " s
@@ -1411,7 +1411,7 @@ menu_bench_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$BENCH_SETTING"
-        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +/-30 minutes"
+        ok "Set to daily $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30 minutes"
         if bench_enabled; then install_bench_timer >/dev/null; ok "systemd timer updated"; fi
         sleep 1;;
       2)
@@ -1437,7 +1437,7 @@ menu_bench(){
     clear
     echo -e "${C_BOLD}===== Scheduled Bench.sh Test =====${C_RESET}  Status: $(bench_status_text)"
     echo "  1) View results"
-    echo "  2) Enable schedule (default daily $(bench_hour):$(bench_minute) +/-30 minutes)"
+    echo "  2) Enable schedule (default daily $(bench_hour):$(bench_minute) +30 minutes)"
     echo "  3) Run once now"
     echo "  4) Settings"
     echo "  5) Disable schedule"
@@ -1544,18 +1544,18 @@ menu_nq_settings(){
     retain=$(grep -E '^RETAIN_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== NodeQuality Settings ==${C_RESET}"
     echo "  Current cycle: starts from ${start_date}, test once every ${interval} days"
-    echo "  Current schedule: same day ${hour}:${minute} +/-30 minutes + evening peak ${ehour}:${eminute} +/-30 minutes"
+    echo "  Current schedule: same day ${hour}:${minute} +30 minutes + evening peak ${ehour}:${eminute} +30 minutes"
     echo "  Result retention: ${retain} days"
     echo
     echo "  Settings guide: only numbers are needed here."
     echo "  Example 1: to test every 7 days, choose 1 and enter 7."
     echo "  Example 2: to test at 6:00 AM, choose 2, then enter hour 6 and minute 0."
     echo "  Example 3: to test at evening peak 22:00, choose 3, then enter hour 22 and minute 0."
-    echo "  Note: +/-30 minutes means 06:00 runs randomly between 05:30 and 06:30."
+    echo "  Note: +30 minutes means 06:00 runs randomly between 06:00 and 06:30."
     echo
     echo "  1) Change test interval days (default 7)"
-    echo "  2) Change daytime test time (default 06:00 +/-30 minutes)"
-    echo "  3) Change evening peak test time (default 22:00 +/-30 minutes)"
+    echo "  2) Change daytime test time (default 06:00 +30 minutes)"
+    echo "  3) Change evening peak test time (default 22:00 +30 minutes)"
     echo "  4) Change retention days"
     echo "  0) Back"
     read -rp "Choice: " s
@@ -1573,12 +1573,12 @@ menu_nq_settings(){
       2)
         echo
         echo "Enter the daytime center time using numbers only; do not enter a colon."
-        echo "Example: 06:00 -> hour 6, minute 0; actual run is random between 05:30 and 06:30."
+        echo "Example: 06:00 -> hour 6, minute 0; actual run is random between 06:00 and 06:30."
         local nh nm
         nh=$(read_int_range "Hour 0-23" "$hour" 0 23) || { sleep 1; continue; }
         nm=$(read_int_range "Minute 0-59" "$minute" 0 59) || { sleep 1; continue; }
         nq_write_settings "$interval" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$ehour" "$eminute" "$start_date" "$retain"
-        ok "Daytime test set to $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +/-30 minutes"
+        ok "Daytime test set to $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30 minutes"
         if nq_enabled; then install_nq_timer >/dev/null; ok "systemd timer updated, and the cycle restarted from today"; fi
         sleep 1;;
       3)
@@ -1589,7 +1589,7 @@ menu_nq_settings(){
         nh=$(read_int_range "Hour 0-23" "$ehour" 0 23) || { sleep 1; continue; }
         nm=$(read_int_range "Minute 0-59" "$eminute" 0 59) || { sleep 1; continue; }
         nq_write_settings "$interval" "$hour" "$minute" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$start_date" "$retain"
-        ok "Evening peak test set to $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +/-30 minutes"
+        ok "Evening peak test set to $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30 minutes"
         if nq_enabled; then install_nq_timer >/dev/null; ok "systemd timer updated, and the cycle restarted from today"; fi
         sleep 1;;
       4)
@@ -1612,7 +1612,7 @@ menu_nq(){
     clear
     echo -e "${C_BOLD}===== Scheduled NodeQuality Test =====${C_RESET}  Status: $(nq_status_text)"
     echo "  1) View results"
-    echo "  2) Enable schedule (default every $(nq_interval_days) days: $(nq_hour):$(nq_minute) +/-30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +/-30 minutes)"
+    echo "  2) Enable schedule (default every $(nq_interval_days) days: $(nq_hour):$(nq_minute) +30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +30 minutes)"
     echo "  3) Run once now"
     echo "  4) Settings"
     echo "  5) Disable schedule"
@@ -1641,13 +1641,13 @@ menu_start_guide(){
   echo "  - Enter 3: enable all five features"
   echo
   echo "Recommended defaults: "
-  echo "  - Scheduled IP Quality Test (daily 03:00 +/-30 minutes)"
-  echo "  - Scheduled YABS Test (daily 04:00 +/-30 minutes; checks memory/swap before enabling)"
+  echo "  - Scheduled IP Quality Test (daily 03:00 +30 minutes)"
+  echo "  - Scheduled YABS Test (daily 04:00 +30 minutes; checks memory/swap before enabling)"
   echo
   echo "Not enabled by default; enable manually or via guided setup if needed: "
   echo "  - Scheduled Ping Monitor"
-  echo "  - Scheduled Bench.sh Test (daily 05:00 +/-30 minutes)"
-  echo "  - Scheduled NodeQuality Test (every 7 days 06:00 +/-30 minutes + same day 22:00 +/-30 minutes)"
+  echo "  - Scheduled Bench.sh Test (daily 05:00 +30 minutes)"
+  echo "  - Scheduled NodeQuality Test (every 7 days 06:00 +30 minutes + same day 22:00 +30 minutes)"
   echo
   read -rp "Press Enter to use defaults; enter 1 for guided setup; enter 2 to cancel; enter 3 to enable all: " ans
 
@@ -1676,8 +1676,8 @@ menu_start_guide(){
     echo
     echo "Reminder: the other three are not enabled automatically; enable them manually from the main menu:"
     echo "  2) Scheduled Ping Monitor"
-    echo "  5) Scheduled Bench.sh Test (default daily $(bench_hour):$(bench_minute) +/-30 minutes)"
-    echo "  6) Scheduled NodeQuality Test (default every $(nq_interval_days) days $(nq_hour):$(nq_minute) +/-30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +/-30 minutes)"
+    echo "  5) Scheduled Bench.sh Test (default daily $(bench_hour):$(bench_minute) +30 minutes)"
+    echo "  6) Scheduled NodeQuality Test (default every $(nq_interval_days) days $(nq_hour):$(nq_minute) +30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +30 minutes)"
     pause
     return
   fi
@@ -1794,10 +1794,10 @@ menu_start_guide(){
   }
 
   guide_enable_one "Scheduled Ping Monitor" "Continuously records target latency/loss; you can add targets in the Ping menu first." install_ping_service
-  guide_enable_one "Scheduled IP Quality Test" "Default: daily at 03:00 +/-30 minutes." install_ipquality_timer
-  guide_enable_one "Scheduled YABS Test" "Default: daily at 04:00 +/-30 minutes; checks memory/swap before enabling." install_yabs_timer
-  guide_enable_one "Scheduled Bench.sh Test" "Default: daily at 05:00 +/-30 minutes." install_bench_timer
-  guide_enable_one "Scheduled NodeQuality Test" "Default: every 7 days; cycle starts from the day you enable it, with one run at 06:00 +/-30 minutes and one at 22:00 +/-30 minutes on the same day." install_nq_timer
+  guide_enable_one "Scheduled IP Quality Test" "Default: daily at 03:00 +30 minutes." install_ipquality_timer
+  guide_enable_one "Scheduled YABS Test" "Default: daily at 04:00 +30 minutes; checks memory/swap before enabling." install_yabs_timer
+  guide_enable_one "Scheduled Bench.sh Test" "Default: daily at 05:00 +30 minutes." install_bench_timer
+  guide_enable_one "Scheduled NodeQuality Test" "Default: every 7 days; cycle starts from the day you enable it, with one run at 06:00 +30 minutes and one at 22:00 +30 minutes on the same day." install_nq_timer
 
   echo
   echo -e "${C_BOLD}Per-feature wizard completed.${C_RESET}"
@@ -1833,10 +1833,10 @@ main_menu(){
     echo "  ------------------------------"
     echo "  1) Setup Wizard"
     echo "  2) Scheduled Ping Monitor"
-    echo "  3) Scheduled IP Quality Test (default daily $(ipq_hour):$(ipq_minute) +/-30 minutes)"
-    echo "  4) Scheduled YABS Test (default daily $(yabs_hour):$(yabs_minute) +/-30 minutes)"
-    echo "  5) Scheduled Bench.sh Test (default daily $(bench_hour):$(bench_minute) +/-30 minutes)"
-    echo "  6) Scheduled NodeQuality Test (default every $(nq_interval_days) days $(nq_hour):$(nq_minute) +/-30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +/-30 minutes)"
+    echo "  3) Scheduled IP Quality Test (default daily $(ipq_hour):$(ipq_minute) +30 minutes)"
+    echo "  4) Scheduled YABS Test (default daily $(yabs_hour):$(yabs_minute) +30 minutes)"
+    echo "  5) Scheduled Bench.sh Test (default daily $(bench_hour):$(bench_minute) +30 minutes)"
+    echo "  6) Scheduled NodeQuality Test (default every $(nq_interval_days) days $(nq_hour):$(nq_minute) +30 minutes + same day $(nq_evening_hour):$(nq_evening_minute) +30 minutes)"
     echo "  0) Exit"
     read -rp "Choice: " s
     case "$s" in
