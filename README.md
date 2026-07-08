@@ -7,13 +7,13 @@
 ### 中文版：国外服务器使用
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyt298t/hahaaa/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
+curl -fsSL https://raw.githubusercontent.com/cyt298t/bietaixian/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
 ```
 
 ### 中文版：国内服务器使用
 
 ```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/cyt298t/hahaaa/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/cyt298t/bietaixian/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
 ```
 
 ### 英文版：国外服务器使用
@@ -240,13 +240,13 @@ A lightweight CLI toolbox for VPS servers. It turns common network quality check
 ### Chinese version: for overseas servers
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyt298t/hahaaa/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
+curl -fsSL https://raw.githubusercontent.com/cyt298t/bietaixian/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
 ```
 
 ### Chinese version: for mainland China servers
 
 ```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/cyt298t/hahaaa/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/cyt298t/bietaixian/main/haha2.sh -o haha2.sh && chmod +x haha2.sh && ./haha2.sh
 ```
 
 ### English version: for overseas servers
