@@ -43,17 +43,17 @@ ok(){ echo -e "${C_GRN}[成功]${C_RESET} $*"; }
 pause(){ read -rp "按回车继续..." _; }
 safe_name(){ echo "$1" | sed 's#[/:*?"<>| ]#_#g'; }
 
-timer_base_pm30(){ # 输出“中心时间 -30分钟”的 HH:MM，用于配合 RandomizedDelaySec=1h 实现 ±30分钟；纯 bash，无需 python3
+timer_base_pm30(){ # 输出设定时间本身的 HH:MM，用于配合 RandomizedDelaySec=30min 实现 +0~30分钟随机延后；纯 bash，无需 python3
   local h="$1" m="$2" total
   h=$((10#$h)); m=$((10#$m))
-  total=$((h * 60 + m - 30))
+  total=$((h * 60 + m))
   while [ "$total" -lt 0 ]; do total=$((total + 1440)); done
   total=$((total % 1440))
   printf '%02d:%02d
 ' $((total / 60)) $((total % 60))
 }
 timer_random_line(){
-  echo "RandomizedDelaySec=1h"
+  echo "RandomizedDelaySec=30min"
 }
 
 read_int_range(){
@@ -551,7 +551,7 @@ Description=sshtool IP quality daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -562,7 +562,7 @@ EOF
     err "定期测 IP 质量开启失败，请运行：systemctl status sshtool-ipquality.timer"
     return 1
   fi
-  ok "定期测 IP 质量已开启 (每天 ${hour}:${minute} ±30分钟)"
+  ok "定期测 IP 质量已开启 (每天 ${hour}:${minute} +30分钟)"
 }
 disable_ipquality_timer(){
   systemctl disable --now sshtool-ipquality.timer 2>/dev/null
@@ -595,7 +595,7 @@ Description=sshtool YABS daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -606,7 +606,7 @@ EOF
     err "定期 YABS 测试开启失败，请运行：systemctl status sshtool-yabs.timer"
     return 1
   fi
-  ok "定期 YABS 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
+  ok "定期 YABS 测试已开启 (每天 ${hour}:${minute} +30分钟)"
 }
 disable_yabs_timer(){
   systemctl disable --now sshtool-yabs.timer 2>/dev/null
@@ -638,7 +638,7 @@ Description=sshtool Bench.sh daily timer
 
 [Timer]
 OnCalendar=*-*-* ${base_h}:${base_m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -649,7 +649,7 @@ EOF
     err "定期 Bench.sh 测试开启失败，请运行：systemctl status sshtool-bench.timer"
     return 1
   fi
-  ok "定期 Bench.sh 测试已开启 (每天 ${hour}:${minute} ±30分钟)"
+  ok "定期 Bench.sh 测试已开启 (每天 ${hour}:${minute} +30分钟)"
 }
 disable_bench_timer(){
   systemctl disable --now sshtool-bench.timer 2>/dev/null
@@ -687,7 +687,7 @@ Description=sshtool NodeQuality interval timer
 [Timer]
 OnCalendar=*-*-* ${b1h}:${b1m}:00
 OnCalendar=*-*-* ${b2h}:${b2m}:00
-RandomizedDelaySec=1h
+RandomizedDelaySec=30min
 Persistent=true
 
 [Install]
@@ -698,7 +698,7 @@ EOF
     err "定期 NodeQuality 检测开启失败，请运行：systemctl status sshtool-nodequality.timer"
     return 1
   fi
-  ok "定期 NodeQuality 检测已开启 (从今天开始，每 ${interval} 天：${hour}:${minute} ±30分钟 + 同日 ${ehour}:${eminute} ±30分钟)"
+  ok "定期 NodeQuality 检测已开启 (从今天开始，每 ${interval} 天：${hour}:${minute} +30分钟 + 同日 ${ehour}:${eminute} +30分钟)"
 }
 disable_nq_timer(){
   systemctl disable --now sshtool-nodequality.timer 2>/dev/null
@@ -1075,14 +1075,14 @@ menu_ipq_settings(){
     minute="$(ipq_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$IPQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== IP 质量设置 ==${C_RESET}"
-    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  当前定时: 每天 ${hour}:${minute} +30分钟"
     echo "  结果保留: ${retain} 天"
     echo
     echo "  设置说明：这里只需要输入数字。"
     echo "  示例：想设置为凌晨 3 点整，就选 1 后：小时输入 3，分钟输入 0。"
-    echo "        因为带 ±30分钟，实际会在 02:30-03:30 之间随机执行。"
+    echo "        因为带 +30分钟，实际会在 03:00-03:30 之间随机执行。"
     echo
-    echo "  1) 修改定时时间（默认 03:00 ±30分钟）"
+    echo "  1) 修改定时时间（默认 03:00 +30分钟）"
     echo "  2) 修改保留天数"
     echo "  0) 返回"
     read -rp "选择: " s
@@ -1098,7 +1098,7 @@ menu_ipq_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$IPQ_SETTING"
-        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30分钟"
         if ipquality_enabled; then install_ipquality_timer >/dev/null; ok "已同步更新 systemd timer"; fi
         sleep 1;;
       2)
@@ -1124,7 +1124,7 @@ menu_ipq(){
     clear
     echo -e "${C_BOLD}===== 定期测 IP 质量 =====${C_RESET}  状态: $(ipq_status_text)"
     echo "  1) 查看结果"
-    echo "  2) 开启定时（默认每天 $(ipq_hour):$(ipq_minute) ±30分钟）"
+    echo "  2) 开启定时（默认每天 $(ipq_hour):$(ipq_minute) +30分钟）"
     echo "  3) 立即测试一次"
     echo "  4) 设置"
     echo "  5) 关闭定时"
@@ -1232,14 +1232,14 @@ menu_yabs_settings(){
     minute="$(yabs_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$YABS_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== YABS 设置 ==${C_RESET}"
-    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  当前定时: 每天 ${hour}:${minute} +30分钟"
     echo "  结果保留: ${retain} 天"
     echo
     echo "  设置说明：这里只需要输入数字。"
     echo "  示例：想设置为凌晨 4 点整，就选 1 后：小时输入 4，分钟输入 0。"
-    echo "        因为带 ±30分钟，实际会在 03:30-04:30 之间随机执行。"
+    echo "        因为带 +30分钟，实际会在 04:00-04:30 之间随机执行。"
     echo
-    echo "  1) 修改定时时间（默认 04:00 ±30分钟）"
+    echo "  1) 修改定时时间（默认 04:00 +30分钟）"
     echo "  2) 修改保留天数"
     echo "  0) 返回"
     read -rp "选择: " s
@@ -1255,7 +1255,7 @@ menu_yabs_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$YABS_SETTING"
-        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30分钟"
         if yabs_enabled; then install_yabs_timer >/dev/null; ok "已同步更新 systemd timer"; fi
         sleep 1;;
       2)
@@ -1281,7 +1281,7 @@ menu_yabs(){
     clear
     echo -e "${C_BOLD}===== 定期 YABS 测试 =====${C_RESET}  状态: $(yabs_status_text)"
     echo "  1) 查看结果"
-    echo "  2) 开启定时（默认每天 $(yabs_hour):$(yabs_minute) ±30分钟）"
+    echo "  2) 开启定时（默认每天 $(yabs_hour):$(yabs_minute) +30分钟）"
     echo "  3) 立即测试一次"
     echo "  4) 设置"
     echo "  5) 关闭定时"
@@ -1387,14 +1387,14 @@ menu_bench_settings(){
     minute="$(bench_minute)"
     retain=$(grep -E '^RETAIN_DAYS=' "$BENCH_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== Bench.sh 设置 ==${C_RESET}"
-    echo "  当前定时: 每天 ${hour}:${minute} ±30分钟"
+    echo "  当前定时: 每天 ${hour}:${minute} +30分钟"
     echo "  结果保留: ${retain} 天"
     echo
     echo "  设置说明：这里只需要输入数字。"
     echo "  示例：想设置为凌晨 5 点整，就选 1 后：小时输入 5，分钟输入 0。"
-    echo "        因为带 ±30分钟，实际会在 04:30-05:30 之间随机执行。"
+    echo "        因为带 +30分钟，实际会在 05:00-05:30 之间随机执行。"
     echo
-    echo "  1) 修改定时时间（默认 05:00 ±30分钟）"
+    echo "  1) 修改定时时间（默认 05:00 +30分钟）"
     echo "  2) 修改保留天数"
     echo "  0) 返回"
     read -rp "选择: " s
@@ -1410,7 +1410,7 @@ menu_bench_settings(){
 MINUTE=%02d
 RETAIN_DAYS=%s
 ' "$nh" "$nm" "$retain" > "$BENCH_SETTING"
-        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        ok "已设置为每天 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30分钟"
         if bench_enabled; then install_bench_timer >/dev/null; ok "已同步更新 systemd timer"; fi
         sleep 1;;
       2)
@@ -1436,7 +1436,7 @@ menu_bench(){
     clear
     echo -e "${C_BOLD}===== 定期 Bench.sh 测试 =====${C_RESET}  状态: $(bench_status_text)"
     echo "  1) 查看结果"
-    echo "  2) 开启定时（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
+    echo "  2) 开启定时（默认每天 $(bench_hour):$(bench_minute) +30分钟）"
     echo "  3) 立即测试一次"
     echo "  4) 设置"
     echo "  5) 关闭定时"
@@ -1545,18 +1545,18 @@ menu_nq_settings(){
     retain=$(grep -E '^RETAIN_DAYS=' "$NQ_SETTING" 2>/dev/null | cut -d= -f2); retain=${retain:-30}
     echo -e "${C_BOLD}== NodeQuality 设置 ==${C_RESET}"
     echo "  当前循环: 从 ${start_date} 开始，每 ${interval} 天检测一次"
-    echo "  当前定时: 当天 ${hour}:${minute} ±30分钟 + 晚高峰 ${ehour}:${eminute} ±30分钟"
+    echo "  当前定时: 当天 ${hour}:${minute} +30分钟 + 晚高峰 ${ehour}:${eminute} +30分钟"
     echo "  结果保留: ${retain} 天"
     echo
     echo "  设置说明：这里只需要输入数字。"
     echo "  示例1：想每 7 天测一次，就选 1 后输入 7。"
     echo "  示例2：想早上 6 点测，就选 2 后：小时输入 6，分钟输入 0。"
     echo "  示例3：想晚高峰 22 点测，就选 3 后：小时输入 22，分钟输入 0。"
-    echo "  说明：±30分钟表示 06:00 会在 05:30-06:30 间随机执行。"
+    echo "  说明：+30分钟表示 06:00 会在 06:00-06:30 间随机执行。"
     echo
     echo "  1) 修改检测间隔天数（默认 7）"
-    echo "  2) 修改白天检测时间（默认 06:00 ±30分钟）"
-    echo "  3) 修改晚高峰检测时间（默认 22:00 ±30分钟）"
+    echo "  2) 修改白天检测时间（默认 06:00 +30分钟）"
+    echo "  3) 修改晚高峰检测时间（默认 22:00 +30分钟）"
     echo "  4) 修改保留天数"
     echo "  0) 返回"
     read -rp "选择: " s
@@ -1574,12 +1574,12 @@ menu_nq_settings(){
       2)
         echo
         echo "请输入白天检测的中心时间，只填数字，不要输入冒号。"
-        echo "例：06:00 -> 小时填 6，分钟填 0；实际 05:30-06:30 随机执行。"
+        echo "例：06:00 -> 小时填 6，分钟填 0；实际 06:00-06:30 随机执行。"
         local nh nm
         nh=$(read_int_range "小时 0-23" "$hour" 0 23) || { sleep 1; continue; }
         nm=$(read_int_range "分钟 0-59" "$minute" 0 59) || { sleep 1; continue; }
         nq_write_settings "$interval" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$ehour" "$eminute" "$start_date" "$retain"
-        ok "已设置白天检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        ok "已设置白天检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30分钟"
         if nq_enabled; then install_nq_timer >/dev/null; ok "已同步更新 systemd timer，并从今天重新开始循环"; fi
         sleep 1;;
       3)
@@ -1590,7 +1590,7 @@ menu_nq_settings(){
         nh=$(read_int_range "小时 0-23" "$ehour" 0 23) || { sleep 1; continue; }
         nm=$(read_int_range "分钟 0-59" "$eminute" 0 59) || { sleep 1; continue; }
         nq_write_settings "$interval" "$hour" "$minute" "$(printf '%02d' "$nh")" "$(printf '%02d' "$nm")" "$start_date" "$retain"
-        ok "已设置晚高峰检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") ±30分钟"
+        ok "已设置晚高峰检测为 $(printf '%02d' "$nh"):$(printf '%02d' "$nm") +30分钟"
         if nq_enabled; then install_nq_timer >/dev/null; ok "已同步更新 systemd timer，并从今天重新开始循环"; fi
         sleep 1;;
       4)
@@ -1613,7 +1613,7 @@ menu_nq(){
     clear
     echo -e "${C_BOLD}===== 定期 NodeQuality 检测 =====${C_RESET}  状态: $(nq_status_text)"
     echo "  1) 查看结果"
-    echo "  2) 开启定时（默认每 $(nq_interval_days) 天：$(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    echo "  2) 开启定时（默认每 $(nq_interval_days) 天：$(nq_hour):$(nq_minute) +30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) +30分钟）"
     echo "  3) 立即测试一次"
     echo "  4) 设置"
     echo "  5) 关闭定时"
@@ -1642,13 +1642,13 @@ menu_start_guide(){
   echo "  - 输入 3：全开，五个功能全部开启"
   echo
   echo "默认推荐开启："
-  echo "  - 定期测 IP 质量（每天 03:00 ±30分钟）"
-  echo "  - 定期 YABS 测试（每天 04:00 ±30分钟；开启前会自动检查内存/swap）"
+  echo "  - 定期测 IP 质量（每天 03:00 +30分钟）"
+  echo "  - 定期 YABS 测试（每天 04:00 +30分钟；开启前会自动检查内存/swap）"
   echo
   echo "默认不自动开启，需要按需手动或在单独引导里开启："
   echo "  - 定期 Ping 监控"
-  echo "  - 定期 Bench.sh 测试（每天 05:00 ±30分钟）"
-  echo "  - 定期 NodeQuality 检测（每 7 天 06:00 ±30分钟 + 同日 22:00 ±30分钟）"
+  echo "  - 定期 Bench.sh 测试（每天 05:00 +30分钟）"
+  echo "  - 定期 NodeQuality 检测（每 7 天 06:00 +30分钟 + 同日 22:00 +30分钟）"
   echo
   read -rp "直接回车按默认开启；输入 1 进入逐个引导；输入 2 取消；输入 3 全开: " ans
 
@@ -1677,8 +1677,8 @@ menu_start_guide(){
     echo
     echo "提醒：另外三个不会自动开启，需要你在主菜单里手动打开："
     echo "  2) 定期 Ping 监控"
-    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
-    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) +30分钟）"
+    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) +30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) +30分钟）"
     pause
     return
   fi
@@ -1795,10 +1795,10 @@ menu_start_guide(){
   }
 
   guide_enable_one "定期 Ping 监控" "用于持续记录目标延迟/丢包；可先到 Ping 菜单添加目标。" install_ping_service
-  guide_enable_one "定期测 IP 质量" "默认每天 03:00 ±30分钟执行。" install_ipquality_timer
-  guide_enable_one "定期 YABS 测试" "默认每天 04:00 ±30分钟执行；开启前会自动检查内存/swap。" install_yabs_timer
-  guide_enable_one "定期 Bench.sh 测试" "默认每天 05:00 ±30分钟执行。" install_bench_timer
-  guide_enable_one "定期 NodeQuality 检测" "默认每 7 天循环；开启当天开始算，同一天 06:00 ±30分钟和 22:00 ±30分钟各测一次。" install_nq_timer
+  guide_enable_one "定期测 IP 质量" "默认每天 03:00 +30分钟执行。" install_ipquality_timer
+  guide_enable_one "定期 YABS 测试" "默认每天 04:00 +30分钟执行；开启前会自动检查内存/swap。" install_yabs_timer
+  guide_enable_one "定期 Bench.sh 测试" "默认每天 05:00 +30分钟执行。" install_bench_timer
+  guide_enable_one "定期 NodeQuality 检测" "默认每 7 天循环；开启当天开始算，同一天 06:00 +30分钟和 22:00 +30分钟各测一次。" install_nq_timer
 
   echo
   echo -e "${C_BOLD}逐个引导完成。${C_RESET}"
@@ -1834,10 +1834,10 @@ main_menu(){
     echo "  ------------------------------"
     echo "  1) 开启引导"
     echo "  2) 定期 Ping 监控"
-    echo "  3) 定期测 IP 质量（默认每天 $(ipq_hour):$(ipq_minute) ±30分钟）"
-    echo "  4) 定期 YABS 测试（默认每天 $(yabs_hour):$(yabs_minute) ±30分钟）"
-    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) ±30分钟）"
-    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) ±30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) ±30分钟）"
+    echo "  3) 定期测 IP 质量（默认每天 $(ipq_hour):$(ipq_minute) +30分钟）"
+    echo "  4) 定期 YABS 测试（默认每天 $(yabs_hour):$(yabs_minute) +30分钟）"
+    echo "  5) 定期 Bench.sh 测试（默认每天 $(bench_hour):$(bench_minute) +30分钟）"
+    echo "  6) 定期 NodeQuality 检测（默认每 $(nq_interval_days) 天 $(nq_hour):$(nq_minute) +30分钟 + 同日 $(nq_evening_hour):$(nq_evening_minute) +30分钟）"
     echo "  0) 退出"
     read -rp "选择: " s
     case "$s" in
