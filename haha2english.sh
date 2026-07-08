@@ -1051,9 +1051,9 @@ menu_ipq_view(){
       1)
         clear
         local j t2
-        # View all: newest records are shown first, oldest last.
-        # files[] files[] were generated sorted by mtime descending; keep 0 -> idx-1 order here.
-        for j in $(seq 0 $((idx-1))); do
+        # View all: oldest records are shown first, newest last.
+        # files[] were generated sorted by mtime descending; iterate idx-1 -> 0 here.
+        for ((j=idx-1; j>=0; j--)); do
           if [ "${iskeep[$j]}" = "1" ]; then t2=" [permanent]"; else t2=""; fi
           echo -e "\n========== $(basename "${files[$j]}" .log)${t2} ==========\n"
           strip_clear "${files[$j]}"
@@ -1206,9 +1206,9 @@ menu_yabs_view(){
       1)
         clear
         local j t2
-        # View all: newest records are shown first, oldest last.
-        # files[] files[] were generated sorted by mtime descending; keep 0 -> idx-1 order here.
-        for j in $(seq 0 $((idx-1))); do
+        # View all: oldest records are shown first, newest last.
+        # files[] were generated sorted by mtime descending; iterate idx-1 -> 0 here.
+        for ((j=idx-1; j>=0; j--)); do
           if [ "${iskeep[$j]}" = "1" ]; then t2=" [permanent]"; else t2=""; fi
           echo -e "
 ========== $(basename "${files[$j]}" .log)${t2} ==========
@@ -1362,9 +1362,9 @@ menu_bench_view(){
       1)
         clear
         local j t2
-        # View all: newest records are shown first, oldest last.
-        # files[] files[] were generated sorted by mtime descending; keep 0 -> idx-1 order here.
-        for j in $(seq 0 $((idx-1))); do
+        # View all: oldest records are shown first, newest last.
+        # files[] were generated sorted by mtime descending; iterate idx-1 -> 0 here.
+        for ((j=idx-1; j>=0; j--)); do
           if [ "${iskeep[$j]}" = "1" ]; then t2=" [permanent]"; else t2=""; fi
           echo -e "\n========== $(basename "${files[$j]}" .log)${t2} =========="
           echo
@@ -1517,7 +1517,7 @@ menu_nq_view(){
       1)
         clear
         local j t2
-        for j in $(seq 0 $((idx-1))); do
+        for ((j=idx-1; j>=0; j--)); do
           if [ "${iskeep[$j]}" = "1" ]; then t2=" [permanent]"; else t2=""; fi
           echo -e "\n========== $(basename "${files[$j]}" .log)${t2} =========="
           echo
